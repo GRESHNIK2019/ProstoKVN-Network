@@ -1,6 +1,6 @@
-# Smart VPN
+# ProstoKVN Network
 
-Smart VPN — Windows VPN client with smart split routing, subscription support, automatic server selection and GitHub updates.
+ProstoKVN Network — Windows network client with smart split routing, subscription support, automatic server selection and GitHub updates.
 
 ## Возможности
 
@@ -16,21 +16,23 @@ Smart VPN — Windows VPN client with smart split routing, subscription support,
 - Проверка новых версий через GitHub Releases.
 - Автообновление EXE с проверкой SHA-256.
 
-## Текущая версия
+## Текущая публичная версия
 
-`0.19.0`
+`0.19.0` — последний релиз под старым названием.
+
+Следующая версия `0.20.0` выходит уже как **ProstoKVN Network**.
 
 ## Локальные данные
 
-Настройки, подписки, скачанные ядра и кэш хранятся отдельно от программы:
+Новая версия использует:
 
-`%LOCALAPPDATA%\SmartVPN\`
+`%LOCALAPPDATA%\ProstoKVN Network\`
 
-Поэтому обновление программы не удаляет пользовательские настройки.
+При первом запуске настройки из предыдущего каталога автоматически переносятся, поэтому подписка и пользовательские параметры не теряются.
 
 ## Обновления
 
-Стабильные версии публикуются через GitHub Releases. Smart VPN проверяет наличие новой версии после запуска и также позволяет запустить проверку вручную через пункт `Помощь`.
+Стабильные версии публикуются через GitHub Releases. ProstoKVN Network проверяет наличие новой версии после запуска и позволяет запустить проверку вручную через пункт `Помощь`.
 
 ## Сборка
 
