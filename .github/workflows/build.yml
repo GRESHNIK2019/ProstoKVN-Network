@@ -2,6 +2,9 @@ name: Build and Release ProstoKVN Network
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
