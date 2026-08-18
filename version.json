@@ -1,7 +1,8 @@
 {
-  "version": "0.18.0",
+  "version": "0.19.0",
   "channel": "stable",
-  "release_tag": "v0.18.0",
+  "release_tag": "v0.19.0",
   "asset": "SmartVPN.exe",
-  "notes": "Smart VPN v18: российские домены .ru/.su/.рф идут напрямую, автоматическая установка sing-box/Xray, менеджер подписок и обновлённый интерфейс."
+  "hash_asset": "SmartVPN.exe.sha256",
+  "notes": "Smart VPN v19: обновлённое нейтральное название, новый каталог %LOCALAPPDATA%\\SmartVPN, GitHub auto-update, SHA-256 verification и сохранённая умная маршрутизация."
 }
