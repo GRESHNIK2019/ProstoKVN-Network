@@ -1,10 +1,10 @@
-name: Build Smart VPN
+name: Build and Release Smart VPN
 
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -22,23 +22,47 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install dependencies
+      - name: Read version
+        shell: powershell
+        run: |
+          $meta = Get-Content version.json -Raw | ConvertFrom-Json
+          "APP_VERSION=$($meta.version)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SOURCE_SHA256=$($meta.source_sha256)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Reconstruct source archive
+        shell: powershell
+        run: |
+          $parts = Get-ChildItem "release_payload/v${env:APP_VERSION}/part-*.txt" | Sort-Object Name
+          if (-not $parts) { throw "Release payload parts not found" }
+          $base64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
+          [IO.File]::WriteAllBytes("SmartVPN_Source.zip", [Convert]::FromBase64String($base64))
+          $hash = (Get-FileHash "SmartVPN_Source.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:SOURCE_SHA256.ToLower()) { throw "Source SHA256 mismatch: $hash" }
+
+      - name: Extract source
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build_source | Out-Null
+          Expand-Archive SmartVPN_Source.zip build_source -Force
+
+      - name: Install build dependencies
         shell: powershell
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pyinstaller
+          python -m pip install PyYAML pyinstaller
 
       - name: Build EXE
         shell: powershell
         run: |
-          pyinstaller --noconfirm --clean --onefile --noconsole --name SmartVPN src/SmartVPN.pyw
+          pyinstaller --noconfirm --clean --onefile --noconsole --name SmartVPN --paths build_source/SmartVPN build_source/SmartVPN/SmartVPN.pyw
 
-      - name: Create SHA256
+      - name: Create hashes
         shell: powershell
         run: |
           $hash = (Get-FileHash dist/SmartVPN.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  SmartVPN.exe" | Out-File -Encoding ascii dist/SmartVPN.exe.sha256
+          $srcHash = (Get-FileHash SmartVPN_Source.zip -Algorithm SHA256).Hash.ToLower()
+          "$srcHash  SmartVPN_Source.zip" | Out-File -Encoding ascii SmartVPN_Source.zip.sha256
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -47,12 +71,30 @@ jobs:
           path: |
             dist/SmartVPN.exe
             dist/SmartVPN.exe.sha256
+            SmartVPN_Source.zip
+            SmartVPN_Source.zip.sha256
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/SmartVPN.exe
-            dist/SmartVPN.exe.sha256
-          generate_release_notes: true
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              dist/SmartVPN.exe `
+              dist/SmartVPN.exe.sha256 `
+              SmartVPN_Source.zip `
+              SmartVPN_Source.zip.sha256 `
+              --title "Smart VPN $tag" `
+              --notes-file RELEASE_NOTES.md `
+              --target $env:GITHUB_SHA
+          } else {
+            gh release upload $tag `
+              dist/SmartVPN.exe `
+              dist/SmartVPN.exe.sha256 `
+              SmartVPN_Source.zip `
+              SmartVPN_Source.zip.sha256 `
+              --clobber
+          }
