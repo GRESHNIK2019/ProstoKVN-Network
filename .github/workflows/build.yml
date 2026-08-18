@@ -26,13 +26,10 @@ jobs:
           "APP_VERSION=$($meta.version)" | Out-File -FilePath $env:GITHUB_ENV -Append
           "SOURCE_SHA256=$($meta.source_sha256)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Reconstruct source archive
+      - name: Verify source archive
         shell: powershell
         run: |
-          $parts = Get-ChildItem "release_payload/v${env:APP_VERSION}/part-*.txt" | Sort-Object Name
-          if (-not $parts) { throw "Release payload parts not found" }
-          $base64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
-          [IO.File]::WriteAllBytes("ProstoKVNNetwork_Source.zip", [Convert]::FromBase64String($base64))
+          Copy-Item "release_payload/v${env:APP_VERSION}/ProstoKVNNetwork_Source.zip" "ProstoKVNNetwork_Source.zip"
           $hash = (Get-FileHash "ProstoKVNNetwork_Source.zip" -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:SOURCE_SHA256.ToLower()) { throw "Source SHA256 mismatch: $hash" }
 
