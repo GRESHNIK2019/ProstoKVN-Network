@@ -32,7 +32,7 @@ jobs:
       - name: Build EXE
         shell: powershell
         run: |
-          pyinstaller --noconfirm --clean --onefile --noconsole --name SmartVPN src/MotorfestVPN_GUI.pyw
+          pyinstaller --noconfirm --clean --onefile --noconsole --name SmartVPN src/SmartVPN.pyw
 
       - name: Create SHA256
         shell: powershell
