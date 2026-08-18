@@ -16,7 +16,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-%PY% -m PyInstaller --noconfirm --clean --onefile --noconsole --name SmartVPN src\SmartVPN.pyw
+%PY% -m PyInstaller --noconfirm --clean --onefile --noconsole --name ProstoKVNNetwork src\ProstoKVNNetwork.pyw
 if errorlevel 1 (
   echo Build failed.
   pause
@@ -24,5 +24,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo EXE created in dist\SmartVPN.exe
+echo EXE created in dist\ProstoKVNNetwork.exe
 pause
