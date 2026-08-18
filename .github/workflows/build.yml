@@ -84,8 +84,11 @@ jobs:
           RELEASE_TARGET: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $tag = "v$env:APP_VERSION"
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
+          $env:RELEASE_TAG = $tag
+          cmd.exe /c "gh release view %RELEASE_TAG% >nul 2>nul"
+          $releaseExists = ($LASTEXITCODE -eq 0)
+
+          if (-not $releaseExists) {
             gh release create $tag `
               dist/SmartVPN.exe `
               dist/SmartVPN.exe.sha256 `
