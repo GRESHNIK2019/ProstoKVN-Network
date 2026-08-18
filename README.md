@@ -16,17 +16,17 @@ ProstoKVN Network — Windows network client with smart split routing, subscript
 - Проверка новых версий через GitHub Releases.
 - Автообновление EXE с проверкой SHA-256.
 
-## Версия
+## Текущая версия
 
-Следующий публичный релиз: `0.20.0`.
+`0.20.0`
 
 ## Локальные данные
 
-Приложение использует каталог:
+Настройки, подписки, скачанные ядра и кэш хранятся отдельно от программы:
 
 `%LOCALAPPDATA%\ProstoKVN Network\`
 
-При первом запуске настройки из предыдущих версий автоматически переносятся.
+При первом запуске новой версии настройки из предыдущего каталога автоматически переносятся.
 
 ## Обновления
 
@@ -34,6 +34,6 @@ ProstoKVN Network — Windows network client with smart split routing, subscript
 
 ## Сборка
 
-Для запуска из исходников требуется Python 3 и зависимости из `requirements.txt`.
+GitHub Actions собирает `ProstoKVNNetwork.exe`, создаёт SHA-256 и публикует Release.
 
-Для сборки Windows EXE используется PyInstaller и GitHub Actions.
+Исходный архив релиза находится в `release_payload/v0.20.0/ProstoKVNNetwork_Source.zip`.
