@@ -1,10 +1,7 @@
-name: Build and Release Smart VPN
+name: Build and Release ProstoKVN Network
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -35,15 +32,15 @@ jobs:
           $parts = Get-ChildItem "release_payload/v${env:APP_VERSION}/part-*.txt" | Sort-Object Name
           if (-not $parts) { throw "Release payload parts not found" }
           $base64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
-          [IO.File]::WriteAllBytes("SmartVPN_Source.zip", [Convert]::FromBase64String($base64))
-          $hash = (Get-FileHash "SmartVPN_Source.zip" -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllBytes("ProstoKVNNetwork_Source.zip", [Convert]::FromBase64String($base64))
+          $hash = (Get-FileHash "ProstoKVNNetwork_Source.zip" -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:SOURCE_SHA256.ToLower()) { throw "Source SHA256 mismatch: $hash" }
 
       - name: Extract source
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force build_source | Out-Null
-          Expand-Archive SmartVPN_Source.zip build_source -Force
+          Expand-Archive ProstoKVNNetwork_Source.zip build_source -Force
 
       - name: Install build dependencies
         shell: powershell
@@ -54,25 +51,25 @@ jobs:
       - name: Build EXE
         shell: powershell
         run: |
-          pyinstaller --noconfirm --clean --onefile --noconsole --name SmartVPN --paths build_source/SmartVPN build_source/SmartVPN/SmartVPN.pyw
+          pyinstaller --noconfirm --clean --onefile --noconsole --name ProstoKVNNetwork --paths build_source/ProstoKVNNetwork build_source/ProstoKVNNetwork/ProstoKVNNetwork.pyw
 
       - name: Create hashes
         shell: powershell
         run: |
-          $hash = (Get-FileHash dist/SmartVPN.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  SmartVPN.exe" | Out-File -Encoding ascii dist/SmartVPN.exe.sha256
-          $srcHash = (Get-FileHash SmartVPN_Source.zip -Algorithm SHA256).Hash.ToLower()
-          "$srcHash  SmartVPN_Source.zip" | Out-File -Encoding ascii SmartVPN_Source.zip.sha256
+          $hash = (Get-FileHash dist/ProstoKVNNetwork.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  ProstoKVNNetwork.exe" | Out-File -Encoding ascii dist/ProstoKVNNetwork.exe.sha256
+          $srcHash = (Get-FileHash ProstoKVNNetwork_Source.zip -Algorithm SHA256).Hash.ToLower()
+          "$srcHash  ProstoKVNNetwork_Source.zip" | Out-File -Encoding ascii ProstoKVNNetwork_Source.zip.sha256
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmartVPN-Windows
+          name: ProstoKVN-Network-Windows
           path: |
-            dist/SmartVPN.exe
-            dist/SmartVPN.exe.sha256
-            SmartVPN_Source.zip
-            SmartVPN_Source.zip.sha256
+            dist/ProstoKVNNetwork.exe
+            dist/ProstoKVNNetwork.exe.sha256
+            ProstoKVNNetwork_Source.zip
+            ProstoKVNNetwork_Source.zip.sha256
 
       - name: Publish GitHub Release
         shell: powershell
@@ -86,18 +83,18 @@ jobs:
 
           if (-not $releaseExists) {
             gh release create $tag `
-              dist/SmartVPN.exe `
-              dist/SmartVPN.exe.sha256 `
-              SmartVPN_Source.zip `
-              SmartVPN_Source.zip.sha256 `
-              --title "Smart VPN $tag" `
+              dist/ProstoKVNNetwork.exe `
+              dist/ProstoKVNNetwork.exe.sha256 `
+              ProstoKVNNetwork_Source.zip `
+              ProstoKVNNetwork_Source.zip.sha256 `
+              --title "ProstoKVN Network $tag" `
               --notes-file RELEASE_NOTES.md `
               --target $env:GITHUB_SHA
           } else {
             gh release upload $tag `
-              dist/SmartVPN.exe `
-              dist/SmartVPN.exe.sha256 `
-              SmartVPN_Source.zip `
-              SmartVPN_Source.zip.sha256 `
+              dist/ProstoKVNNetwork.exe `
+              dist/ProstoKVNNetwork.exe.sha256 `
+              ProstoKVNNetwork_Source.zip `
+              ProstoKVNNetwork_Source.zip.sha256 `
               --clobber
           }
