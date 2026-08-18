@@ -1,0 +1,58 @@
+name: Build Smart VPN
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Build EXE
+        shell: powershell
+        run: |
+          pyinstaller --noconfirm --clean --onefile --noconsole --name SmartVPN src/MotorfestVPN_GUI.pyw
+
+      - name: Create SHA256
+        shell: powershell
+        run: |
+          $hash = (Get-FileHash dist/SmartVPN.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  SmartVPN.exe" | Out-File -Encoding ascii dist/SmartVPN.exe.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartVPN-Windows
+          path: |
+            dist/SmartVPN.exe
+            dist/SmartVPN.exe.sha256
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/SmartVPN.exe
+            dist/SmartVPN.exe.sha256
+          generate_release_notes: true
