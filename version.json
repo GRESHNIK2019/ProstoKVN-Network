@@ -1,10 +1,10 @@
 {
-  "version": "0.19.0",
+  "version": "0.20.0",
   "channel": "stable",
-  "release_tag": "v0.19.0",
-  "asset": "SmartVPN.exe",
-  "hash_asset": "SmartVPN.exe.sha256",
-  "source_asset": "SmartVPN_Source.zip",
-  "source_sha256": "68b2738b425cc468e82f4c97ab67231a34c117a3af87d5f0e795769d88a1e0ff",
-  "notes": "Smart VPN v19: нейтральное название, GitHub auto-update, автоматическая установка VPN-ядер, RU DIRECT и улучшенный интерфейс."
+  "release_tag": "v0.20.0",
+  "asset": "ProstoKVNNetwork.exe",
+  "hash_asset": "ProstoKVNNetwork.exe.sha256",
+  "source_asset": "ProstoKVNNetwork_Source.zip",
+  "source_sha256": "ccef966d7ddff63c84961302820d1bbce9137304d1d109243c581a5c399e41d8",
+  "notes": "ProstoKVN Network v0.20.0: полный ребрендинг, новый EXE, новый каталог данных и сохранённое автообновление."
 }
