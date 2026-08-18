@@ -4,5 +4,7 @@
   "release_tag": "v0.19.0",
   "asset": "SmartVPN.exe",
   "hash_asset": "SmartVPN.exe.sha256",
-  "notes": "Smart VPN v19: обновлённое нейтральное название, новый каталог %LOCALAPPDATA%\\SmartVPN, GitHub auto-update, SHA-256 verification и сохранённая умная маршрутизация."
+  "source_asset": "SmartVPN_Source.zip",
+  "source_sha256": "68b2738b425cc468e82f4c97ab67231a34c117a3af87d5f0e795769d88a1e0ff",
+  "notes": "Smart VPN v19: нейтральное название, GitHub auto-update, автоматическая установка VPN-ядер, RU DIRECT и улучшенный интерфейс."
 }
