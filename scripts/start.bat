@@ -15,7 +15,6 @@ if errorlevel 1 (
   echo Installing required Python package PyYAML...
   %PY% -m pip install --user PyYAML
   if errorlevel 1 (
-    echo.
     echo Failed to install PyYAML.
     pause
     exit /b 1
@@ -24,8 +23,8 @@ if errorlevel 1 (
 
 for /f "delims=" %%I in ('where pythonw 2^>nul') do if not defined PYW set "PYW=%%I"
 if defined PYW (
-  start "" "%PYW%" "%CD%\src\MotorfestVPN_GUI.pyw"
+  start "" "%PYW%" "%CD%\src\SmartVPN.pyw"
 ) else (
-  %PY% "%CD%\src\MotorfestVPN_GUI.pyw"
+  %PY% "%CD%\src\SmartVPN.pyw"
 )
 exit /b 0
