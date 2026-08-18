@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0\.."
-title Smart VPN Launcher
+title ProstoKVN Network Launcher
 
 where py >nul 2>&1
 if %errorlevel%==0 (
@@ -23,8 +23,8 @@ if errorlevel 1 (
 
 for /f "delims=" %%I in ('where pythonw 2^>nul') do if not defined PYW set "PYW=%%I"
 if defined PYW (
-  start "" "%PYW%" "%CD%\src\SmartVPN.pyw"
+  start "" "%PYW%" "%CD%\src\ProstoKVNNetwork.pyw"
 ) else (
-  %PY% "%CD%\src\SmartVPN.pyw"
+  %PY% "%CD%\src\ProstoKVNNetwork.pyw"
 )
 exit /b 0
