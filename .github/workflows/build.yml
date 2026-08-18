@@ -5,9 +5,6 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -81,7 +78,6 @@ jobs:
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TARGET: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $tag = "v$env:APP_VERSION"
           $env:RELEASE_TAG = $tag
@@ -96,7 +92,7 @@ jobs:
               SmartVPN_Source.zip.sha256 `
               --title "Smart VPN $tag" `
               --notes-file RELEASE_NOTES.md `
-              --target $env:RELEASE_TARGET
+              --target $env:GITHUB_SHA
           } else {
             gh release upload $tag `
               dist/SmartVPN.exe `
