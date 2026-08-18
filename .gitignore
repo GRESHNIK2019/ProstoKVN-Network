@@ -10,7 +10,7 @@ build/
 dist/
 *.spec
 
-# Local Smart VPN data
+# Local ProstoKVN Network data
 settings.json
 runtime/
 cores/
