@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -17,6 +18,7 @@ from vpn_runner import TunRunner
 class FakeProcess:
     def __init__(self, running: bool = True):
         self.running = running
+        self.pid = 12345
 
     def poll(self):
         return None if self.running else 1
@@ -80,6 +82,38 @@ class VpnRunnerLifecycleTests(unittest.TestCase):
         self.assertIsNone(runner.proc)
         self.assertIsNone(runner.xray_proc)
         self.assertFalse(runner._starting)
+
+    def test_start_fails_if_tun_interface_never_appears(self):
+        runner = self.make_runner("trojan")
+        fake_tun = FakeProcess(True)
+        check_result = mock.Mock(returncode=0, stderr="", stdout="")
+        stopped = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner.cfg_path = root / "active_tun.json"
+            runner.log_path = root / "active_tun.log"
+            runner.xray_cfg_path = root / "active_xray.json"
+            runner.xray_log_path = root / "active_xray.log"
+
+            with (
+                mock.patch.object(vpn_runner, "_kill_stale_runtime_processes"),
+                mock.patch.object(vpn_runner.subprocess, "run", return_value=check_result),
+                mock.patch.object(vpn_runner.subprocess, "Popen", return_value=fake_tun),
+                mock.patch.object(vpn_runner, "_wait_tun_interface", return_value=False),
+                mock.patch.object(vpn_runner, "_stop_process_tree", side_effect=lambda proc: stopped.append(proc)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "TUN-интерфейс"):
+                    runner.start()
+
+        self.assertIn(fake_tun, stopped)
+        self.assertIsNone(runner.proc)
+        self.assertFalse(runner._starting)
+
+    def test_wait_tun_interface_requires_real_interface(self):
+        process = FakeProcess(True)
+        with mock.patch.object(vpn_runner, "_interface_probably_exists", return_value=False):
+            self.assertFalse(vpn_runner._wait_tun_interface("prostokvn_network_tun", process, timeout=0))
 
 
 if __name__ == "__main__":
