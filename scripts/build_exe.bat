@@ -9,7 +9,13 @@ if %errorlevel%==0 (
   set "PY=python"
 )
 
-%PY% -m pip install --user --upgrade pip
+%PY% scripts\check_source.py
+if errorlevel 1 (
+  echo Source check failed.
+  pause
+  exit /b 1
+)
+
 %PY% -m pip install --user -r requirements.txt pyinstaller
 if errorlevel 1 (
   echo Failed to install build dependencies.

@@ -1,48 +1,69 @@
 # ProstoKVN Network
 
-ProstoKVN Network — Windows-клиент для раздельной маршрутизации трафика через VPN. Приложение работает с подписками, автоматически проверяет доступные узлы и применяет отдельные правила для игр и сервисов.
+ProstoKVN Network — open-source Windows-клиент для раздельной маршрутизации трафика через VPN. Приложение работает с подписками, проверяет доступные узлы и применяет отдельные правила для игр и сервисов.
 
 ## Возможности
 
 - стратегии `Smart`, `Games` и `Global`;
-- российские доменные зоны `.ru`, `.su` и `.рф` направляются напрямую;
+- `.ru`, `.su` и `.рф` направляются напрямую;
 - отдельная маршрутизация для игр, Ubisoft, Discord и Telegram;
-- поддержка VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC и VLESS XHTTP/gRPC/WS/REALITY;
+- VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC и VLESS XHTTP/gRPC/WS/REALITY;
 - автоматическое тестирование и выбор узла;
 - управление подпиской;
 - автоматическая установка официальных `sing-box` и `Xray-core`;
 - светлая, тёмная и системная тема;
-- проверка новых версий через GitHub Releases;
+- проверка обновлений через GitHub Releases;
 - проверка SHA-256 перед установкой обновления.
 
 ## Структура проекта
 
 - `src/` — исходный код и ресурсы приложения;
-- `scripts/` — локальный запуск и сборка;
-- `.github/workflows/build.yml` — воспроизводимая Windows-сборка и SignPath;
+- `scripts/` — локальный запуск, проверка исходников и сборка;
+- `docs/` — правила разработки;
+- `.github/workflows/build.yml` — Windows-сборка и SignPath pipeline;
 - `CODE_SIGNING_POLICY.md` — правила публичной подписи;
 - `PRIVACY.md` — политика конфиденциальности;
 - `THIRD_PARTY.md` — сторонние компоненты.
-
-Временных `release_payload`, base64-частей и дублирующих каталогов сборки в рабочей ветке больше нет.
-
-## Системные изменения
-
-Во время работы VPN приложение создаёт TUN-интерфейс и временно изменяет маршрутизацию Windows. Ядра и служебные файлы хранятся в `%LOCALAPPDATA%\ProstoKVN Network\`.
 
 ## Текущая версия
 
 `0.21.0`
 
-## Лицензия
+## Запуск из исходников
 
-Собственный код ProstoKVN Network распространяется по лицензии **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). Полный текст находится в [`LICENSE`](LICENSE).
+```bat
+scripts\start.bat
+```
 
-Copyright (C) 2026 GRESHNIK2019.
+## Проверка исходников
+
+```bat
+python scripts\check_source.py
+```
+
+Проверка валидирует UTF-8, синтаксис Python и совпадение версии между `version.json`, `src/app_config.py` и `src/version_info.txt`.
+
+## Локальная сборка
+
+```bat
+scripts\build_exe.bat
+```
+
+Готовый файл появится в `dist\ProstoKVNNetwork.exe`.
+
+## GitHub Actions и подпись
+
+Каждый push в `main` собирает CI artifact. Официальный Release создаётся только из тега вида `vX.Y.Z`, если подключён SignPath и полученный EXE проходит проверку Authenticode.
+
+До одобрения проекта SignPath Foundation публичная публикация подписанного EXE в workflow остаётся выключенной. Настройка описана в [`SIGNING.md`](SIGNING.md).
+
+## Системные изменения
+
+Во время работы VPN приложение создаёт TUN-интерфейс и временно изменяет маршрутизацию Windows. Ядра, настройки и служебные файлы хранятся в `%LOCALAPPDATA%\ProstoKVN Network\`.
 
 ## Конфиденциальность
 
-В приложении нет телеметрии и рекламной аналитики. Подробнее: [`PRIVACY.md`](PRIVACY.md).
+В приложении нет встроенной телеметрии и рекламной аналитики. Подробнее: [`PRIVACY.md`](PRIVACY.md).
 
 ## Code signing policy
 
@@ -53,19 +74,11 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 - Committers and reviewers: [GRESHNIK2019](https://github.com/GRESHNIK2019)
 - Approvers: [GRESHNIK2019](https://github.com/GRESHNIK2019)
 
-## Запуск из исходников
+## Лицензия
 
-```bat
-scripts\start.bat
-```
+Собственный код ProstoKVN Network распространяется по лицензии **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). Полный текст находится в [`LICENSE`](LICENSE).
 
-## Локальная сборка
-
-```bat
-scripts\build_exe.bat
-```
-
-GitHub Actions собирает `ProstoKVNNetwork.exe` напрямую из `src/`. Пока SignPath не подключён, EXE доступен как CI artifact. Публичный Release публикуется только после успешной Authenticode-подписи.
+Copyright (C) 2026 GRESHNIK2019.
 
 ## Удаление
 

@@ -1,13 +1,16 @@
-name: Build and Release ProstoKVN Network
+name: Build ProstoKVN Network
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build-windows:
@@ -22,42 +25,30 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Repair UTF-8 text
-        shell: powershell
-        run: |
-          python tools/fix_encoding.py
-          python -m compileall -q src
-
-      - name: Save repaired sources
-        shell: powershell
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/ProstoKVNNetwork.pyw src/app_config.py src/updater.py version.json RELEASE_NOTES.md
-
-          if (git status --porcelain) {
-            git commit -m "Fix UTF-8 encoding in v0.21.0 [skip ci]"
-            git push origin HEAD:main
-          } else {
-            Write-Host "UTF-8 sources are already clean."
-          }
-
       - name: Read version
         shell: powershell
         run: |
           $meta = Get-Content version.json -Raw | ConvertFrom-Json
           "APP_VERSION=$($meta.version)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Install dependencies
+      - name: Check source
+        shell: powershell
+        run: python scripts/check_source.py
+
+      - name: Check release tag
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        shell: powershell
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($tagVersion -ne $env:APP_VERSION) {
+            throw "Tag version $tagVersion does not match version.json ($env:APP_VERSION)."
+          }
+
+      - name: Install build dependencies
         shell: powershell
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
-
-      - name: Check Python sources
-        shell: powershell
-        run: |
-          python -m compileall -q src
 
       - name: Build EXE
         shell: powershell
@@ -79,18 +70,24 @@ jobs:
           $sourceFiles = @(
             "src",
             "scripts",
+            "docs",
             "requirements.txt",
             "README.md",
             "LICENSE",
             "PRIVACY.md",
             "THIRD_PARTY.md",
             "CODE_SIGNING_POLICY.md",
+            "SIGNING.md",
+            "version.json",
+            "RELEASE_NOTES.md",
+            ".editorconfig",
+            ".gitattributes",
             ".github/workflows/build.yml"
           )
           Compress-Archive -Path $sourceFiles -DestinationPath ProstoKVNNetwork_Source.zip -Force
 
       - name: Validate SignPath config
-        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
         shell: powershell
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -117,6 +114,7 @@ jobs:
           }
 
       - name: Upload unsigned EXE for SignPath
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
         id: upload-unsigned
         uses: actions/upload-artifact@v4
         with:
@@ -125,7 +123,7 @@ jobs:
           if-no-files-found: error
 
       - name: Sign EXE with SignPath
-        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -137,7 +135,7 @@ jobs:
           output-artifact-directory: signed
 
       - name: Use signed EXE
-        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
         shell: powershell
         run: |
           $signedExe = Get-ChildItem "signed" -Filter "ProstoKVNNetwork.exe" -Recurse | Select-Object -First 1
@@ -147,7 +145,7 @@ jobs:
           Copy-Item $signedExe.FullName "dist/ProstoKVNNetwork.exe" -Force
 
       - name: Verify Authenticode signature
-        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
         shell: powershell
         run: |
           $signature = Get-AuthenticodeSignature "dist/ProstoKVNNetwork.exe"
@@ -158,13 +156,6 @@ jobs:
           if ($signature.Status -ne 'Valid') {
             throw "The executable does not have a valid Authenticode signature."
           }
-
-      - name: Unsigned build notice
-        if: ${{ vars.SIGNPATH_ENABLED != 'true' }}
-        shell: powershell
-        run: |
-          Write-Warning "SignPath OSS signing is not configured yet."
-          Write-Warning "The EXE is available only as a CI artifact. Public Release is skipped."
 
       - name: Create hashes
         shell: powershell
@@ -185,13 +176,20 @@ jobs:
             ProstoKVNNetwork_Source.zip
             ProstoKVNNetwork_Source.zip.sha256
 
+      - name: Unsigned build notice
+        if: ${{ vars.SIGNPATH_ENABLED != 'true' || !startsWith(github.ref, 'refs/tags/v') }}
+        shell: powershell
+        run: |
+          Write-Host "This is a CI build. Public Release is skipped."
+          Write-Host "A public release requires a v* tag and SignPath signing."
+
       - name: Publish signed GitHub Release
-        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v$env:APP_VERSION"
+          $tag = $env:GITHUB_REF_NAME
           gh release view $tag *> $null
           $releaseExists = ($LASTEXITCODE -eq 0)
 
