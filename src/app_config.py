@@ -15,6 +15,16 @@ UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 UPDATE_ASSET = "ProstoKVNNetwork.exe"
 UPDATE_HASH_ASSET = "ProstoKVNNetwork.exe.sha256"
 
+# Публичные релизы проекта подписываются сертификатом SignPath Foundation.
+# Одного статуса Authenticode=Valid недостаточно: updater также сверяет издателя.
+UPDATE_SIGNER_SUBJECTS = ("SignPath Foundation",)
+
+# Ядра обновляются вместе с приложением после проверки совместимости, а не
+# автоматически до неизвестного latest. sing-box 1.13.14 оставлен как
+# проверенная Windows/TUN база; Xray 26.7.28 используется для VLESS/XHTTP.
+TESTED_SINGBOX_VERSION = "1.13.14"
+TESTED_XRAY_VERSION = "26.7.28"
+
 STRATEGIES = {
     "smart_ru": "Smart",
     "game_only": "Приложения",
