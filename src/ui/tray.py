@@ -199,6 +199,21 @@ class TrayController:
             pass
 
     @staticmethod
+    def _fallback_icon_image() -> Any:
+        """Создаёт иконку в памяти, если ресурс .ico не распаковался PyInstaller."""
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGBA", (64, 64), (7, 22, 38, 255))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((5, 5, 59, 59), fill=(0, 153, 255, 255))
+        draw.polygon(
+            [(32, 13), (48, 19), (46, 39), (32, 51), (18, 39), (16, 19)],
+            fill=(7, 35, 57, 255),
+        )
+        draw.line((23, 32, 29, 38, 42, 25), fill=(255, 255, 255, 255), width=4)
+        return image
+
+    @staticmethod
     def _load_icon_image() -> Any:
         from PIL import Image
 
@@ -206,6 +221,8 @@ class TrayController:
         meipass = getattr(sys, "_MEIPASS", "")
         if meipass:
             candidates.append(Path(meipass) / "assets" / "ProstoKVNNetwork.ico")
+            # Резерв для сборок, где add-data оказался в корне _MEIPASS.
+            candidates.append(Path(meipass) / "ProstoKVNNetwork.ico")
         candidates.append(Path(__file__).resolve().parents[1] / "assets" / "ProstoKVNNetwork.ico")
 
         for path in candidates:
@@ -217,4 +234,6 @@ class TrayController:
             except Exception:
                 continue
 
-        raise RuntimeError("Не найдена иконка ProstoKVNNetwork.ico для системного трея.")
+        # Отсутствие внешнего .ico больше не ломает системный трей. Иконка
+        # генерируется прямо в памяти и не зависит от пути PyInstaller _MEI.
+        return TrayController._fallback_icon_image()
