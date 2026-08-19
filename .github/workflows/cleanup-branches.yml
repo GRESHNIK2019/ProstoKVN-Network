@@ -1,0 +1,45 @@
+name: Remove temporary branches
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Delete temporary branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branches=(
+            "fix-source-upload"
+            "icon-fix"
+            "icon-fix-2"
+            "icon-fix-3"
+            "release-v0.19.0-check"
+            "repo-cleanup"
+          )
+
+          for branch in "${branches[@]}"; do
+            encoded_branch="${branch//\//%2F}"
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/git/refs/heads/${encoded_branch}" \
+              >/dev/null 2>&1 || true
+          done
+
+      - name: Remove this temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/cleanup-branches.yml
+          git commit -m "Remove temporary cleanup workflow"
+          git push origin HEAD:main
