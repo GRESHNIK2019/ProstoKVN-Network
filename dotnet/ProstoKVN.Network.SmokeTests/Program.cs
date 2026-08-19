@@ -70,4 +70,53 @@ var encodedSubscription = Convert.ToBase64String(Encoding.UTF8.GetBytes(
 var parsedPayload = NodeParser.ParsePayload(encodedSubscription);
 Assert(parsedPayload.Count == 2, "base64 subscription payload");
 
+var migrationRoot = Path.Combine(Path.GetTempPath(), "ProstoKVN-CSharp-Smoke-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(migrationRoot);
+try
+{
+    var plainUrl = "https://example.test/subscription";
+    var legacyJson = $$"""
+    {
+      "subscriptions": [
+        {
+          "id": "legacy01",
+          "name": "import_sub",
+          "url": "plain:{{Convert.ToBase64String(Encoding.UTF8.GetBytes(plainUrl))}}",
+          "enabled": true,
+          "update_interval": "15",
+          "sort_order": "2",
+          "last_update": 1700000000
+        }
+      ],
+      "active_subscription_id": "legacy01",
+      "singbox_path": "C:\\cores\\sing-box.exe",
+      "xray_path": "C:\\cores\\xray.exe",
+      "route_strategy": "game_only",
+      "theme_mode": "dark",
+      "custom_vpn_processes": ["game.exe"],
+      "route_rules": [
+        {"type":"domain_suffix","value":"*.ubisoft.com","action":"proxy"}
+      ],
+      "auto_reconnect": false
+    }
+    """;
+    await File.WriteAllTextAsync(Path.Combine(migrationRoot, "settings.json"), legacyJson, Encoding.UTF8);
+    var migrationService = new SettingsService(migrationRoot);
+    var migrated = await migrationService.LoadAsync();
+    Assert(migrated.SchemaVersion == 2, "settings schema version");
+    Assert(migrated.RouteMode == RouteMode.Applications, "legacy route mode");
+    Assert(migrated.Theme == "Dark", "legacy theme");
+    Assert(!migrated.AutoReconnect, "legacy auto reconnect");
+    Assert(migrated.Subscriptions.Count == 1 && migrated.Subscriptions[0].UpdateIntervalMinutes == 15, "legacy subscription fields");
+    Assert(migrationService.UnprotectSecret(migrated.Subscriptions[0].ProtectedUrl) == plainUrl, "legacy protected subscription URL");
+    Assert(migrated.RouteRules.Any(x => x.Type == RouteRuleType.DomainSuffix && x.Value == ".ubisoft.com"), "legacy route_rules");
+    Assert(migrated.RouteRules.Any(x => x.Type == RouteRuleType.Process && x.Value.Equals("game.exe", StringComparison.OrdinalIgnoreCase)), "legacy app migration");
+    Assert(File.Exists(Path.Combine(migrationRoot, "settings.v2.json")), "modern settings file must be created");
+    Assert(File.Exists(Path.Combine(migrationRoot, "settings.json")), "legacy settings must be preserved");
+}
+finally
+{
+    try { Directory.Delete(migrationRoot, true); } catch { }
+}
+
 Console.WriteLine("C# Core smoke tests: OK");
