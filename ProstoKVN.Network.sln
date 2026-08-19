@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProstoKVN.Network.Core", "dotnet\ProstoKVN.Network.Core\ProstoKVN.Network.Core.csproj", "{A67D8169-C1DA-4FE0-84D4-9EF40FE0F544}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProstoKVN.Network.App", "dotnet\ProstoKVN.Network.App\ProstoKVN.Network.App.csproj", "{FC69F187-2F6B-4AA2-AB98-297A10D072C7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProstoKVN.Network.SmokeTests", "dotnet\ProstoKVN.Network.SmokeTests\ProstoKVN.Network.SmokeTests.csproj", "{5B0B0AA8-54AD-4E7D-879F-B1B83FEC81C5}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A67D8169-C1DA-4FE0-84D4-9EF40FE0F544}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A67D8169-C1DA-4FE0-84D4-9EF40FE0F544}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A67D8169-C1DA-4FE0-84D4-9EF40FE0F544}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A67D8169-C1DA-4FE0-84D4-9EF40FE0F544}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FC69F187-2F6B-4AA2-AB98-297A10D072C7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FC69F187-2F6B-4AA2-AB98-297A10D072C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FC69F187-2F6B-4AA2-AB98-297A10D072C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FC69F187-2F6B-4AA2-AB98-297A10D072C7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B0B0AA8-54AD-4E7D-879F-B1B83FEC81C5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B0B0AA8-54AD-4E7D-879F-B1B83FEC81C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B0B0AA8-54AD-4E7D-879F-B1B83FEC81C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B0B0AA8-54AD-4E7D-879F-B1B83FEC81C5}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
