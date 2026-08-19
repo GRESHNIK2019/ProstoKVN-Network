@@ -22,8 +22,8 @@ STRATEGIES = {
 }
 
 STRATEGY_DESCRIPTIONS = {
-    "smart_ru": "Ð‘Ð»Ð¾ÐºÐ¸Ñ€Ð¾Ð²ÐºÐ¸ Ð Ð¤ + YouTube/Discord/Telegram + Ð¸Ð³Ñ€Ñ‹ Ñ‡ÐµÑ€ÐµÐ· VPN",
-    "game_only": "Ð¢Ð¾Ð»ÑŒÐºÐ¾ Ð¸Ð³Ñ€Ñ‹ / Ubisoft / Discord Ñ‡ÐµÑ€ÐµÐ· VPN",
+    "smart_ru": "Блокировки РФ + YouTube/Discord/Telegram + игры через VPN",
+    "game_only": "Только игры / Ubisoft / Discord через VPN",
     "global": "ÐŸÐ¾Ñ‡Ñ‚Ð¸ Ð²ÐµÑÑŒ Ñ‚Ñ€Ð°Ñ„Ð¸Ðº Ñ‡ÐµÑ€ÐµÐ· VPN, Steam.exe Ð¾ÑÑ‚Ð°Ñ‘Ñ‚ÑÑ DIRECT",
 }
 

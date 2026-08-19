@@ -51,7 +51,7 @@ def check_latest_release(current_version: str, api_url: str, exe_asset: str, has
             hash_url = str(asset.get("browser_download_url") or "")
 
     if not exe_url:
-        raise RuntimeError(f"Ð’ Release v{latest} Ð½ÐµÑ‚ Ñ„Ð°Ð¹Ð»Ð° {exe_asset}.")
+        raise RuntimeError(f"В Release v{latest} нет файла {exe_asset}.")
 
     return {
         "version": latest,

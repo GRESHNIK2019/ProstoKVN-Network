@@ -1188,11 +1188,11 @@ class App(tk.Tk):
             text += short_notes + "\n\n"
         text += "Ð¡ÐºÐ°Ñ‡Ð°Ñ‚ÑŒ Ð¸ ÑƒÑÑ‚Ð°Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ ÑÐµÐ¹Ñ‡Ð°Ñ?"
 
-        if messagebox.askyesno("ÐžÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ ProstoKVN Network", text):
+        if messagebox.askyesno("Обновление ProstoKVN Network", text):
             self._download_update(info)
         else:
             self.status_var.set(f"Ð”Ð¾ÑÑ‚ÑƒÐ¿Ð½Ð¾ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ v{latest}")
-            self._append_log(f"[UPDATE] v{latest} Ð¾Ñ‚Ð»Ð¾Ð¶ÐµÐ½Ð¾ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÐµÐ¼")
+            self._append_log(f"[UPDATE] v{latest} отложено пользователем")
 
     def _download_update(self, info: dict):
         if not getattr(sys, "frozen", False):
@@ -1202,8 +1202,8 @@ class App(tk.Tk):
             )
             return
 
-        self.status_var.set(f"Ð¡ÐºÐ°Ñ‡Ð¸Ð²Ð°ÑŽ ProstoKVN Network v{info.get('version')}...")
-        self._append_log(f"[UPDATE] Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° v{info.get('version')}")
+        self.status_var.set(f"Скачиваю ProstoKVN Network v{info.get('version')}...")
+        self._append_log(f"[UPDATE] Загрузка v{info.get('version')}")
 
         def worker():
             try:
