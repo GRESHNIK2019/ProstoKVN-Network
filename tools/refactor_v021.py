@@ -1,0 +1,457 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from pathlib import Path
+import json
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+
+
+def cut_block(text: str, start: str, end: str, replacement: str) -> tuple[str, str]:
+    start_pos = text.index(start)
+    end_pos = text.index(end, start_pos)
+    block = text[start_pos:end_pos]
+    return text[:start_pos] + replacement + text[end_pos:], block
+
+
+def add_spdx(text: str) -> str:
+    marker = "# SPDX-License-Identifier: GPL-3.0-or-later"
+    if marker in text:
+        return text
+    first_line, rest = text.split("\n", 1)
+    return first_line + "\n" + marker + "\n" + rest
+
+
+def split_core() -> None:
+    core_path = SRC / "core.py"
+    core = core_path.read_text(encoding="utf-8")
+
+    core, paths_block = cut_block(
+        core,
+        "APP_DIR = Path(__file__).resolve().parent\n",
+        "ITDOG_DOMAIN_URLS = [\n",
+        "from paths import (\n"
+        "    APP_DIR, RUNTIME_DIR, USER_DATA_DIR, BLOCKLIST_DIR, SETTINGS_PATH,\n"
+        "    MANAGED_CORE_DIR, BLOCKLIST_META_PATH,\n"
+        ")\n\n",
+    )
+    paths_text = """# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import shutil
+
+""" + paths_block
+    (SRC / "paths.py").write_text(paths_text, encoding="utf-8")
+
+    core, nodes_block = cut_block(
+        core,
+        "def b64decode_loose(text: str) -> bytes:\n",
+        "def find_free_port() -> int:\n",
+        "from nodes import Node, download_subscription\n\n",
+    )
+    nodes_text = """# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import base64
+import copy
+from dataclasses import dataclass, field
+import ipaddress
+import json
+import re
+from typing import Any, Callable
+import urllib.parse
+import urllib.request
+
+try:
+    import yaml  # type: ignore
+except Exception:
+    yaml = None
+
+""" + nodes_block
+    (SRC / "nodes.py").write_text(nodes_text, encoding="utf-8")
+
+    core, cores_block = cut_block(
+        core,
+        "def _windows_arch() -> str:\n",
+        "def _node_query(node: Node) -> dict[str, str]:\n",
+        "from cores import install_official_cores, find_singbox_binary, find_xray_binary\n\n",
+    )
+    cores_block = cores_block.replace(
+        "%LOCALAPPDATA%\\ProstoKVN Network\\cores.",
+        "%LOCALAPPDATA%/ProstoKVN Network/cores.",
+    )
+    cores_text = """# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import shutil
+import tempfile
+from typing import Any, Callable
+import urllib.request
+import zipfile
+
+from paths import APP_DIR, MANAGED_CORE_DIR
+
+""" + cores_block
+    (SRC / "cores.py").write_text(cores_text, encoding="utf-8")
+
+    core_path.write_text(add_spdx(core), encoding="utf-8")
+
+
+def write_app_config() -> None:
+    text = '''# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import os
+
+try:
+    import winreg
+except Exception:
+    winreg = None
+
+APP_VERSION = "0.21.0"
+UPDATE_REPO = "GRESHNIK2019/ProstoKVN-Network"
+UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+UPDATE_ASSET = "ProstoKVNNetwork.exe"
+UPDATE_HASH_ASSET = "ProstoKVNNetwork.exe.sha256"
+
+STRATEGIES = {
+    "smart_ru": "Smart",
+    "game_only": "Games",
+    "global": "Global",
+}
+
+STRATEGY_DESCRIPTIONS = {
+    "smart_ru": "Блокировки РФ + YouTube/Discord/Telegram + игры через VPN",
+    "game_only": "Только игры / Ubisoft / Discord через VPN",
+    "global": "Почти весь трафик через VPN, Steam.exe остаётся DIRECT",
+}
+
+THEME_LABELS = {
+    "system": "Система",
+    "light": "Светлая",
+    "dark": "Тёмная",
+}
+
+PALETTES = {
+    "dark": {
+        "root": "#18191C", "card": "#1F2024", "card2": "#25272C", "border": "#34363C",
+        "text": "#F2F2F2", "secondary": "#B5BAC1", "muted": "#8B8F97", "accent": "#2A8CFF",
+        "accent_hover": "#4A9EFF", "accent_text": "#FFFFFF", "segment": "#2B2D33",
+        "segment_hover": "#373A42", "good_bg": "#0E4B2D", "good": "#39D16D",
+        "bad": "#FF5E57", "selection": "#234A75", "menu_bg": "#141519", "menu_active": "#2A8CFF",
+    },
+    "light": {
+        "root": "#F3F5F7", "card": "#FFFFFF", "card2": "#F1F3F5", "border": "#D8DDE3",
+        "text": "#111111", "secondary": "#4B5563", "muted": "#6B7280", "accent": "#1677FF",
+        "accent_hover": "#3A8CFF", "accent_text": "#FFFFFF", "segment": "#ECEFF3",
+        "segment_hover": "#E3E8EF", "good_bg": "#DDF6E5", "good": "#118A43",
+        "bad": "#D22D20", "selection": "#D9E8FF", "menu_bg": "#FFFFFF", "menu_active": "#1677FF",
+    },
+}
+
+
+def detect_windows_theme() -> str:
+    if os.name != "nt" or winreg is None:
+        return "dark"
+    try:
+        path = r"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return "light" if int(value) else "dark"
+    except Exception:
+        return "dark"
+'''
+    (SRC / "app_config.py").write_text(text, encoding="utf-8")
+
+
+def write_updater() -> None:
+    text = '''# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import urllib.request
+
+
+def version_tuple(value: str) -> tuple[int, ...]:
+    value = str(value or "").strip().lower().lstrip("v")
+    parts: list[int] = []
+    for item in value.split("."):
+        match = re.match(r"(\\d+)", item)
+        parts.append(int(match.group(1)) if match else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:4])
+
+
+def check_latest_release(current_version: str, api_url: str, exe_asset: str, hash_asset: str) -> dict | None:
+    request = urllib.request.Request(
+        api_url,
+        headers={
+            "User-Agent": f"ProstoKVNNetwork/{current_version}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        data = json.loads(response.read().decode("utf-8", errors="replace"))
+
+    latest = str(data.get("tag_name") or "").strip().lstrip("v")
+    if not latest:
+        raise RuntimeError("GitHub Release не содержит tag_name.")
+    if version_tuple(latest) <= version_tuple(current_version):
+        return None
+
+    exe_url = ""
+    hash_url = ""
+    for asset in data.get("assets") or []:
+        name = str(asset.get("name") or "")
+        if name == exe_asset:
+            exe_url = str(asset.get("browser_download_url") or "")
+        elif name == hash_asset:
+            hash_url = str(asset.get("browser_download_url") or "")
+
+    if not exe_url:
+        raise RuntimeError(f"В Release v{latest} нет файла {exe_asset}.")
+
+    return {
+        "version": latest,
+        "exe_url": exe_url,
+        "hash_url": hash_url,
+        "notes": str(data.get("body") or "").strip(),
+    }
+
+
+def download_update(info: dict, current_version: str) -> Path:
+    update_dir = Path(tempfile.gettempdir()) / "ProstoKVNNetwork_Update"
+    update_dir.mkdir(parents=True, exist_ok=True)
+    exe_path = update_dir / "ProstoKVNNetwork.new.exe"
+
+    request = urllib.request.Request(str(info["exe_url"]), headers={"User-Agent": f"ProstoKVNNetwork/{current_version}"})
+    with urllib.request.urlopen(request, timeout=90) as response, exe_path.open("wb") as output:
+        shutil.copyfileobj(response, output)
+
+    expected_hash = _download_expected_hash(str(info.get("hash_url") or ""), current_version)
+    if expected_hash and _sha256(exe_path) != expected_hash:
+        exe_path.unlink(missing_ok=True)
+        raise RuntimeError("SHA-256 обновления не совпадает.")
+    return exe_path
+
+
+def _download_expected_hash(hash_url: str, current_version: str) -> str:
+    if not hash_url:
+        return ""
+    request = urllib.request.Request(hash_url, headers={"User-Agent": f"ProstoKVNNetwork/{current_version}"})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        text = response.read().decode("ascii", errors="ignore").strip()
+    return (text.split() or [""])[0].strip().lower()
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def launch_self_updater(new_exe: Path, current_exe: Path, pid: int) -> None:
+    new_exe = new_exe.resolve()
+    current_exe = current_exe.resolve()
+    updater = new_exe.parent / "ProstoKVNNetwork_updater.cmd"
+    lines = [
+        "@echo off",
+        "chcp 65001 >nul",
+        f'set "PID={pid}"',
+        f'set "NEW={new_exe}"',
+        f'set "DST={current_exe}"',
+        ":wait",
+        'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
+        "if not errorlevel 1 (",
+        "    timeout /t 1 /nobreak >nul",
+        "    goto wait",
+        ")",
+        'copy /Y "%NEW%" "%DST%" >nul',
+        "if errorlevel 1 exit /b 1",
+        'start "" "%DST%"',
+        'del /Q "%NEW%" >nul 2>&1',
+        'del /Q "%~f0" >nul 2>&1',
+    ]
+    updater.write_text("\\r\\n".join(lines) + "\\r\\n", encoding="utf-8")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    subprocess.Popen(["cmd.exe", "/c", str(updater)], cwd=str(new_exe.parent), creationflags=flags)
+'''
+    (SRC / "updater.py").write_text(text, encoding="utf-8")
+
+
+def refactor_app() -> None:
+    app_path = SRC / "ProstoKVNNetwork.pyw"
+    app = add_spdx(app_path.read_text(encoding="utf-8"))
+    app = app.replace("try:\n    import winreg\nexcept Exception:\n    winreg = None\n\n", "")
+
+    constants_pos = app.index('APP_VERSION = "0.20.0"\n')
+    constants_end = app.index("\n\ndef relaunch_as_admin() -> bool:\n", constants_pos)
+    imports = (
+        "from app_config import (\n"
+        "    APP_VERSION, PALETTES, STRATEGIES, STRATEGY_DESCRIPTIONS, THEME_LABELS,\n"
+        "    UPDATE_API, UPDATE_ASSET, UPDATE_HASH_ASSET, detect_windows_theme,\n"
+        ")\n"
+        "from updater import check_latest_release, download_update, launch_self_updater\n"
+    )
+    app = app[:constants_pos] + imports + app[constants_end + 2:]
+
+    strategy_start = app.index("STRATEGIES = {\n")
+    strategy_end = app.index("\n\nclass App(tk.Tk):\n", strategy_start)
+    app = app[:strategy_start] + app[strategy_end + 2:]
+
+    app = app.replace("self.title('ProstoKVN Network v0.20.0')", "self.title(f'ProstoKVN Network v{APP_VERSION}')")
+    app = app.replace(
+        "                    self._refresh_header_summary()\n                    self._refresh_header_summary()\n",
+        "                    self._refresh_header_summary()\n",
+    )
+
+    updates_start = app.index("    # ---------------- Updates ----------------\n")
+    vpn_start = app.index("    # ---------------- VPN ----------------\n", updates_start)
+    update_methods = '''    # ---------------- Updates ----------------
+    def check_for_updates(self, manual: bool = False):
+        self._append_log("[UPDATE] Проверяю GitHub Releases...")
+        if manual:
+            self.status_var.set("Проверяю обновления...")
+
+        def worker():
+            try:
+                info = check_latest_release(APP_VERSION, UPDATE_API, UPDATE_ASSET, UPDATE_HASH_ASSET)
+                if info is None:
+                    self.events.put(("update_none", manual))
+                    return
+                info["manual"] = manual
+                self.events.put(("update_available", info))
+            except Exception as exc:
+                self.events.put(("update_error", (manual, str(exc))))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _offer_update(self, info: dict):
+        latest = str(info.get("version") or "?")
+        notes = str(info.get("notes") or "").strip()
+        short_notes = notes[:700] + ("..." if len(notes) > 700 else "")
+        text = f"Доступна новая версия ProstoKVN Network v{latest}.\\nТекущая версия: v{APP_VERSION}.\\n\\n"
+        if short_notes:
+            text += short_notes + "\\n\\n"
+        text += "Скачать и установить обновление сейчас?"
+
+        if messagebox.askyesno("Обновление ProstoKVN Network", text):
+            self._download_update(info)
+        else:
+            self.status_var.set(f"Доступно обновление v{latest}")
+            self._append_log(f"[UPDATE] v{latest} отложено пользователем")
+
+    def _download_update(self, info: dict):
+        if not getattr(sys, "frozen", False):
+            messagebox.showinfo(
+                "ProstoKVN Network",
+                "Автоустановка работает в собранной EXE-версии.\\nПри запуске из исходников новая версия только обнаруживается.",
+            )
+            return
+
+        self.status_var.set(f"Скачиваю ProstoKVN Network v{info.get('version')}...")
+        self._append_log(f"[UPDATE] Загрузка v{info.get('version')}")
+
+        def worker():
+            try:
+                exe_path = download_update(info, APP_VERSION)
+                self.events.put(("update_downloaded", {
+                    "version": str(info.get("version") or ""),
+                    "path": exe_path,
+                }))
+            except Exception as exc:
+                self.events.put(("update_download_error", str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_self_update(self, payload: dict):
+        new_exe = Path(payload["path"]).resolve()
+        launch_self_updater(new_exe, Path(sys.executable).resolve(), os.getpid())
+        self._append_log(f"[UPDATE] Установка v{payload.get('version')} после закрытия программы")
+        self.stop_vpn(silent=True)
+        self.destroy()
+
+'''
+    app_path.write_text(app[:updates_start] + update_methods + app[vpn_start:], encoding="utf-8")
+
+
+def update_release_files() -> None:
+    version_info_path = SRC / "version_info.txt"
+    version_info = version_info_path.read_text(encoding="utf-8")
+    version_info = version_info.replace("(0, 20, 0, 0)", "(0, 21, 0, 0)")
+    version_info = version_info.replace("u'0.20.0'", "u'0.21.0'")
+    version_info_path.write_text(version_info, encoding="utf-8")
+
+    version_json = {
+        "version": "0.21.0",
+        "channel": "stable",
+        "release_tag": "v0.21.0",
+        "asset": "ProstoKVNNetwork.exe",
+        "hash_asset": "ProstoKVNNetwork.exe.sha256",
+        "source_asset": "ProstoKVNNetwork_Source.zip",
+        "notes": "ProstoKVN Network v0.21.0: модульная структура исходников, исправленный updater repository и очистка технического долга.",
+    }
+    (ROOT / "version.json").write_text(
+        json.dumps(version_json, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    release_notes = '''# ProstoKVN Network v0.21.0
+
+Технический релиз с рефакторингом исходного кода без намеренного изменения пользовательского поведения.
+
+## Изменения
+
+- модель узлов и парсинг подписок вынесены в `src/nodes.py`;
+- установка и поиск sing-box/Xray вынесены в `src/cores.py`;
+- пути и локальные каталоги приложения вынесены в `src/paths.py`;
+- версия, темы и константы интерфейса вынесены в `src/app_config.py`;
+- проверка, загрузка и установка обновлений вынесены в `src/updater.py`;
+- updater теперь проверяет релизы `GRESHNIK2019/ProstoKVN-Network`;
+- удалён дублирующий вызов обновления сводки интерфейса;
+- сборка проверяет весь каталог `src` через `compileall`.
+
+Подпись публичного EXE будет выполняться через SignPath Foundation после одобрения проекта.
+'''
+    (ROOT / "RELEASE_NOTES.md").write_text(release_notes, encoding="utf-8")
+
+    readme_path = ROOT / "README.md"
+    readme = readme_path.read_text(encoding="utf-8").replace("`0.20.0`", "`0.21.0`")
+    readme = readme.replace(
+        "GitHub Actions собирает `ProstoKVNNetwork.exe` на GitHub-hosted Windows runner.",
+        "GitHub Actions собирает `ProstoKVNNetwork.exe` напрямую из открытых исходников в `src/` на GitHub-hosted Windows runner.",
+    )
+    readme_path.write_text(readme, encoding="utf-8")
+
+
+def main() -> None:
+    split_core()
+    write_app_config()
+    write_updater()
+    refactor_app()
+    update_release_files()
+
+
+if __name__ == "__main__":
+    main()
