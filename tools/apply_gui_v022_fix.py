@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import io
+import sys
+
 import apply_gui_v022 as migration
+
+
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 
 def replace_first(source: str, old: str, new: str, label: str) -> str:
