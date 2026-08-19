@@ -38,10 +38,11 @@ def save_settings(path: Path, data: dict[str, Any]) -> None:
         file.flush()
         os.fsync(file.fileno())
 
-    if path.exists():
-        try:
-            shutil.copy2(path, backup)
-        except Exception:
-            pass
-
     os.replace(temp, path)
+
+    # Backup создаём уже из нового файла. Так после миграции со старой версии
+    # в .bak не остаётся открытый URL подписки.
+    try:
+        shutil.copy2(path, backup)
+    except Exception:
+        pass
