@@ -9,10 +9,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from nodes import Node
-from node_tester import make_xray_vless_outbound
+import node_tester
+from xray_compat import install_xray_config_compat
 
 
 class XrayVlessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        install_xray_config_compat()
+
     def make_share_node(self, transport: str, security: str = "tls") -> Node:
         source = (
             "vless://11111111-1111-1111-1111-111111111111@example.com:443"
@@ -32,24 +37,24 @@ class XrayVlessTests(unittest.TestCase):
             extra={"transport": transport, "security": security},
         )
 
-    def test_websocket_uses_current_method_field(self):
-        outbound = make_xray_vless_outbound(self.make_share_node("ws"))
+    def test_websocket_uses_compatible_network_field(self):
+        outbound = node_tester.make_xray_vless_outbound(self.make_share_node("ws"))
         stream = outbound["streamSettings"]
-        self.assertEqual(stream["method"], "websocket")
-        self.assertNotIn("network", stream)
+        self.assertEqual(stream["network"], "websocket")
+        self.assertNotIn("method", stream)
 
-    def test_grpc_uses_current_method_field(self):
-        outbound = make_xray_vless_outbound(self.make_share_node("grpc"))
+    def test_grpc_uses_compatible_network_field(self):
+        outbound = node_tester.make_xray_vless_outbound(self.make_share_node("grpc"))
         stream = outbound["streamSettings"]
-        self.assertEqual(stream["method"], "grpc")
-        self.assertNotIn("network", stream)
+        self.assertEqual(stream["network"], "grpc")
+        self.assertNotIn("method", stream)
 
-    def test_xhttp_reality_uses_password_public_key_field(self):
-        outbound = make_xray_vless_outbound(self.make_share_node("xhttp", "reality"))
+    def test_xhttp_reality_uses_public_key(self):
+        outbound = node_tester.make_xray_vless_outbound(self.make_share_node("xhttp", "reality"))
         stream = outbound["streamSettings"]
-        self.assertEqual(stream["method"], "xhttp")
-        self.assertIn("password", stream["realitySettings"])
-        self.assertNotIn("publicKey", stream["realitySettings"])
+        self.assertEqual(stream["network"], "xhttp")
+        self.assertIn("publicKey", stream["realitySettings"])
+        self.assertNotIn("password", stream["realitySettings"])
 
     def test_clash_nested_grpc_reality_is_preserved(self):
         node = Node(
@@ -79,12 +84,12 @@ class XrayVlessTests(unittest.TestCase):
                 },
             },
         )
-        outbound = make_xray_vless_outbound(node)
+        outbound = node_tester.make_xray_vless_outbound(node)
         stream = outbound["streamSettings"]
-        self.assertEqual(stream["method"], "grpc")
+        self.assertEqual(stream["network"], "grpc")
         self.assertEqual(stream["grpcSettings"]["serviceName"], "edge-service")
         self.assertEqual(stream["realitySettings"]["serverName"], "cdn.example.com")
-        self.assertEqual(stream["realitySettings"]["password"], "PUBKEY")
+        self.assertEqual(stream["realitySettings"]["publicKey"], "PUBKEY")
         self.assertEqual(stream["realitySettings"]["shortId"], "abcd")
 
     def test_singbox_json_transport_and_tls_are_preserved(self):
@@ -110,9 +115,9 @@ class XrayVlessTests(unittest.TestCase):
             },
             extra={"transport": "ws", "security": "tls"},
         )
-        outbound = make_xray_vless_outbound(node)
+        outbound = node_tester.make_xray_vless_outbound(node)
         stream = outbound["streamSettings"]
-        self.assertEqual(stream["method"], "websocket")
+        self.assertEqual(stream["network"], "websocket")
         self.assertEqual(stream["wsSettings"]["path"], "/socket")
         self.assertEqual(stream["wsSettings"]["host"], "edge.example.com")
         self.assertEqual(stream["wsSettings"]["headers"]["X-Test"], "1")
