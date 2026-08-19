@@ -8,6 +8,14 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from xray_compat import install_xray_config_compat
+
+
+# node_tester загружается раньше routing/settings_store в основном приложении.
+# Ставим compatibility-layer до первой проверки узлов и запуска Xray-моста,
+# чтобы уже установленное у пользователя ядро не ломалось из-за различий схемы.
+install_xray_config_compat()
+
 
 # Эти ключи управляются отдельными страницами настроек. Основной экран старых
 # версий о них не знает, поэтому при обычном сохранении их нельзя терять.
