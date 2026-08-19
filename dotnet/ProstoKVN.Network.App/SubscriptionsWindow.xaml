@@ -40,10 +40,7 @@
                                     <TextBlock Text="{x:Bind Name}" FontWeight="SemiBold" />
                                     <TextBlock Text="{x:Bind Url}" Foreground="{ThemeResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                    <Ellipse Width="8" Height="8" Fill="{ThemeResource GoodBrush}" />
-                                    <TextBlock Text="ACTIVE" Foreground="{ThemeResource GoodBrush}" Visibility="{x:Bind IsActive}" />
-                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{x:Bind ActiveMark, Mode=OneWay}" Foreground="{ThemeResource GoodBrush}" VerticalAlignment="Center" FontWeight="SemiBold" />
                             </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>
