@@ -40,10 +40,12 @@ public sealed class Subscription
     public bool Enabled { get; set; } = true;
     public int UpdateIntervalMinutes { get; set; }
     public int SortOrder { get; set; } = 1;
+    public DateTimeOffset? LastUpdateUtc { get; set; }
 }
 
 public sealed class AppSettings
 {
+    public int SchemaVersion { get; set; } = 2;
     public string ActiveSubscriptionId { get; set; } = string.Empty;
     public List<Subscription> Subscriptions { get; set; } = [];
     public RouteMode RouteMode { get; set; } = RouteMode.Smart;
