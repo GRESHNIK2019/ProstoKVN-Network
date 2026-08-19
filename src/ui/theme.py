@@ -1,0 +1,139 @@
+# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import ctypes
+import os
+from tkinter import ttk
+
+from app_config import PALETTES, THEME_LABELS, detect_windows_theme
+
+
+class ThemeMixin:
+    def _resolved_theme(self) -> str:
+        mode = self.theme_mode_var.get()
+        if mode == "system":
+            return detect_windows_theme()
+        return mode if mode in PALETTES else "dark"
+
+    def _style(self) -> None:
+        palette = self.palette
+        self.configure(bg=palette["root"])
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure("TFrame", background=palette["root"])
+        style.configure("Card.TFrame", background=palette["card"])
+        style.configure(
+            "TButton",
+            font=("Segoe UI", 10),
+            padding=(10, 7),
+            background=palette["card2"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+        )
+        style.map(
+            "TButton",
+            background=[("active", palette["segment_hover"])],
+            foreground=[("disabled", palette["muted"])],
+        )
+        style.configure(
+            "Primary.TButton",
+            font=("Segoe UI Semibold", 10),
+            padding=(10, 7),
+            background=palette["accent"],
+            foreground=palette["accent_text"],
+            bordercolor=palette["accent"],
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("active", palette["accent_hover"]), ("disabled", palette["border"])],
+            foreground=[("disabled", palette["muted"])],
+        )
+        style.configure(
+            "Treeview",
+            background=palette["card"],
+            fieldbackground=palette["card"],
+            foreground=palette["text"],
+            rowheight=28,
+            borderwidth=0,
+            font=("Segoe UI", 10),
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=palette["card2"],
+            foreground=palette["text"],
+            relief="flat",
+            font=("Segoe UI Semibold", 9),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", palette["selection"])],
+            foreground=[("selected", palette["text"])],
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=palette["card2"],
+            troughcolor=palette["card"],
+            bordercolor=palette["border"],
+            arrowcolor=palette["text"],
+        )
+
+    def _sync_titlebar_theme(self) -> None:
+        if os.name != "nt":
+            return
+        try:
+            hwnd = self.winfo_id()
+            dark = ctypes.c_int(1 if self.current_theme == "dark" else 0)
+            dwm = ctypes.windll.dwmapi
+            if dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark)) != 0:
+                dwm.DwmSetWindowAttribute(hwnd, 19, ctypes.byref(dark), ctypes.sizeof(dark))
+        except Exception:
+            pass
+
+    def _set_theme_mode(self, mode: str) -> None:
+        if mode not in THEME_LABELS:
+            return
+        self.theme_mode_var.set(mode)
+        self._save_settings()
+        resolved = self._resolved_theme()
+        if resolved != self.current_theme:
+            self.current_theme = resolved
+            self.palette = PALETTES[resolved]
+            self._rebuild_ui()
+        else:
+            self._refresh_theme_buttons()
+            self._sync_titlebar_theme()
+
+    def _refresh_theme_buttons(self) -> None:
+        if not hasattr(self, "theme_buttons"):
+            return
+        palette = self.palette
+        mode = self.theme_mode_var.get()
+        for key, button in self.theme_buttons.items():
+            if key == mode:
+                button.configure(
+                    bg=palette["accent"],
+                    fg=palette["accent_text"],
+                    activebackground=palette["accent_hover"],
+                    activeforeground=palette["accent_text"],
+                )
+            else:
+                button.configure(
+                    bg=palette["segment"],
+                    fg=palette["text"],
+                    activebackground=palette["segment_hover"],
+                    activeforeground=palette["text"],
+                )
+
+    def _poll_system_theme(self) -> None:
+        if self.theme_mode_var.get() == "system":
+            resolved = detect_windows_theme()
+            if resolved != self.current_theme:
+                self.current_theme = resolved
+                self.palette = PALETTES[resolved]
+                self._rebuild_ui()
+        self.after(1500, self._poll_system_theme)
