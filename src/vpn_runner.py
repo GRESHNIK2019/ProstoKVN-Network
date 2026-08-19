@@ -165,6 +165,9 @@ class TunRunner:
         self.proc: subprocess.Popen[Any] | None = None
         self.xray_proc: subprocess.Popen[Any] | None = None
         self._starting = False
+        self._health_stop: threading.Event | None = None
+        self._health_thread: threading.Thread | None = None
+        self._health_failure = ""
         self.cfg_path = RUNTIME_DIR / "active_tun.json"
         self.log_path = RUNTIME_DIR / "active_tun.log"
         self.xray_cfg_path = RUNTIME_DIR / "active_xray.json"
@@ -206,6 +209,8 @@ class TunRunner:
                 return
 
             self._starting = True
+            self._health_failure = ""
+            self._health_stop = threading.Event()
             try:
                 # После аварийного завершения прошлой копии могли остаться процессы,
                 # которые всё ещё используют наши active_*.json.
@@ -260,6 +265,7 @@ class TunRunner:
                     timeout=8.0,
                 )
                 if ready:
+                    self._start_health_monitor()
                     return
 
                 if self.proc.poll() is not None:
@@ -279,12 +285,51 @@ class TunRunner:
             finally:
                 self._starting = False
 
+    def _start_health_monitor(self) -> None:
+        stop_event = self._health_stop
+        if stop_event is None:
+            return
+
+        def monitor() -> None:
+            missing_checks = 0
+            while not stop_event.wait(1.5):
+                if not self._main_process_running():
+                    return
+
+                if _interface_probably_exists(TUN_INTERFACE_NAME):
+                    missing_checks = 0
+                    continue
+
+                missing_checks += 1
+                if missing_checks < 2:
+                    continue
+
+                with _VPN_LIFECYCLE_LOCK:
+                    if stop_event is not self._health_stop or stop_event.is_set():
+                        return
+                    self._health_failure = (
+                        f"TUN-интерфейс {TUN_INTERFACE_NAME} исчез после запуска. "
+                        "VPN-сеанс остановлен для безопасного переподключения."
+                    )
+                    self._stop_locked()
+                return
+
+        self._health_thread = threading.Thread(
+            target=monitor,
+            name="ProstoKVN-TUN-Health",
+            daemon=True,
+        )
+        self._health_thread.start()
+
     def stop(self) -> None:
         with _VPN_LIFECYCLE_LOCK:
             self._starting = False
             self._stop_locked()
 
     def _stop_locked(self) -> None:
+        if self._health_stop is not None:
+            self._health_stop.set()
+
         # Сначала TUN, затем локальный Xray-мост.
         _stop_process_tree(self.proc)
         _stop_process_tree(self.xray_proc)
@@ -316,10 +361,14 @@ class TunRunner:
         # Watchdog не должен считать VPN упавшим, пока start() ещё поднимает Xray/TUN.
         if self._starting:
             return True
+        if self._health_failure:
+            return False
         return self._main_process_running()
 
     def failure_reason(self) -> str:
         parts: list[str] = []
+        if self._health_failure:
+            parts.append(self._health_failure)
         tun_log = self._read_log_tail(self.log_path)
         xray_log = self._read_log_tail(self.xray_log_path)
         if tun_log:
