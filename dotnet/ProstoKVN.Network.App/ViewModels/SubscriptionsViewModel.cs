@@ -79,8 +79,8 @@ public partial class SubscriptionsViewModel : ObservableObject
             Name = string.IsNullOrWhiteSpace(item.Name) ? "Подписка" : item.Name.Trim(),
             ProtectedUrl = _settings.ProtectSecret(item.Url.Trim()),
             Enabled = item.Enabled,
-            UpdateIntervalMinutes = Math.Max(0, item.UpdateIntervalMinutes),
-            SortOrder = item.SortOrder,
+            UpdateIntervalMinutes = Math.Max(0, (int)Math.Round(item.UpdateIntervalMinutes)),
+            SortOrder = Math.Max(0, (int)Math.Round(item.SortOrder)),
         }).ToList();
         _main.Settings.ActiveSubscriptionId = active.Id;
         await _main.SaveSettingsAsync();
@@ -103,7 +103,11 @@ public partial class SubscriptionItemViewModel : ObservableObject
     [ObservableProperty] private string name = "import_sub";
     [ObservableProperty] private string url = string.Empty;
     [ObservableProperty] private bool enabled = true;
-    [ObservableProperty] private int updateIntervalMinutes;
-    [ObservableProperty] private int sortOrder = 1;
+    [ObservableProperty] private double updateIntervalMinutes;
+    [ObservableProperty] private double sortOrder = 1;
     [ObservableProperty] private bool isActive;
+
+    public string ActiveMark => IsActive ? "● ACTIVE" : string.Empty;
+
+    partial void OnIsActiveChanged(bool value) => OnPropertyChanged(nameof(ActiveMark));
 }
