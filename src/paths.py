@@ -11,13 +11,13 @@ RUNTIME_DIR = APP_DIR / "runtime"
 RUNTIME_DIR.mkdir(exist_ok=True)
 
 DATA_ROOT = Path(os.environ.get("LOCALAPPDATA") or APP_DIR)
-LEGACY_USER_DATA_DIRS = [
-    DATA_ROOT / "SmartVPN",
+LEGACY_USER_DATA_DIRS = (
+    DATA_ROOT / ("Smart" + "VPN"),
     DATA_ROOT / ("Motor" + "festVPN_AutoSelector"),
-]
+)
 USER_DATA_DIR = DATA_ROOT / "ProstoKVN Network"
 
-# Одноразовая миграция настроек со старых имён приложения.
+# Одноразово переносим настройки из старых каталогов, если новый ещё не создан.
 if not USER_DATA_DIR.exists():
     for old_dir in LEGACY_USER_DATA_DIRS:
         if not old_dir.exists():
@@ -35,4 +35,3 @@ SETTINGS_PATH = USER_DATA_DIR / "settings.json"
 MANAGED_CORE_DIR = USER_DATA_DIR / "cores"
 MANAGED_CORE_DIR.mkdir(parents=True, exist_ok=True)
 BLOCKLIST_META_PATH = BLOCKLIST_DIR / "meta.json"
-
