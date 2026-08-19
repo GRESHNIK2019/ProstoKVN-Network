@@ -8,6 +8,9 @@ on:
       - v0.22-improvements
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -20,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -27,7 +32,7 @@ jobs:
           python-version: '3.13'
 
       - name: Apply v0.22 GUI migration
-        if: ${{ github.ref == 'refs/heads/v0.22-improvements' }}
+        if: ${{ github.ref == 'refs/heads/v0.22-improvements' || github.head_ref == 'v0.22-improvements' }}
         shell: powershell
         run: |
           python tools/apply_gui_v022.py
