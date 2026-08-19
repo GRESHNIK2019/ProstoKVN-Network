@@ -7,6 +7,9 @@ on:
       - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -34,6 +37,10 @@ jobs:
       - name: Check source
         shell: powershell
         run: python scripts/check_source.py
+
+      - name: Run unit tests
+        shell: powershell
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Check release tag
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -66,25 +73,7 @@ jobs:
 
       - name: Create source archive
         shell: powershell
-        run: |
-          $sourceFiles = @(
-            "src",
-            "scripts",
-            "docs",
-            "requirements.txt",
-            "README.md",
-            "LICENSE",
-            "PRIVACY.md",
-            "THIRD_PARTY.md",
-            "CODE_SIGNING_POLICY.md",
-            "SIGNING.md",
-            "version.json",
-            "RELEASE_NOTES.md",
-            ".editorconfig",
-            ".gitattributes",
-            ".github/workflows/build.yml"
-          )
-          Compress-Archive -Path $sourceFiles -DestinationPath ProstoKVNNetwork_Source.zip -Force
+        run: git archive --format=zip --output=ProstoKVNNetwork_Source.zip HEAD
 
       - name: Validate SignPath config
         if: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}

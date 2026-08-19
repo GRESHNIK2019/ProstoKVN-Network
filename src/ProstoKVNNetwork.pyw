@@ -17,14 +17,18 @@ from app_config import (
     APP_VERSION, PALETTES, STRATEGIES, STRATEGY_DESCRIPTIONS, THEME_LABELS,
     UPDATE_API, UPDATE_ASSET, UPDATE_HASH_ASSET, detect_windows_theme,
 )
-from core import (
-    TunRunner, blocklists_age_seconds, get_cached_ru_blocklists, is_admin,
-    test_node, update_ru_blocklists,
-)
+from blocklists import blocklists_age_seconds, get_cached_ru_blocklists, update_ru_blocklists
 from cores import find_singbox_binary, find_xray_binary, install_official_cores
+from node_tester import test_node
 from nodes import Node, download_subscription
 from paths import SETTINGS_PATH
+from routing import normalize_process_names
+from settings_store import load_settings, save_settings
+from subscriptions import dump_subscriptions, load_subscriptions, touch_subscription
+from ui.subscriptions import SubscriptionMixin
+from ui.theme import ThemeMixin
 from updater import check_latest_release, download_update, launch_self_updater
+from vpn_runner import TunRunner, is_admin
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -45,7 +49,7 @@ if os.name == 'nt' and not is_admin():
         raise SystemExit(0)
 
 
-class App(tk.Tk):
+class App(ThemeMixin, SubscriptionMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -60,6 +64,10 @@ class App(tk.Tk):
         self.advanced_open = False
         self.applied_strategy_key: str | None = None
         self.blocklist_paths = get_cached_ru_blocklists()
+        self.subscriptions = []
+        self.active_subscription_id = ''
+        self.custom_vpn_processes: list[str] = []
+        self._auto_reconnect_attempted = False
 
         self.url_var = tk.StringVar()
         self.subscription_name_var = tk.StringVar(value='import_sub')
@@ -80,6 +88,9 @@ class App(tk.Tk):
         self.singbox_var = tk.StringVar()
         self.xray_var = tk.StringVar()
         self.block_var = tk.StringVar(value='Списки: —')
+        self.custom_apps_var = tk.StringVar(value='Приложения VPN: —')
+        self.engine_var = tk.StringVar(value='Ядро: —')
+        self.auto_reconnect_var = tk.BooleanVar(value=True)
         self.admin_var = tk.StringVar(value='Admin ✓' if is_admin() else 'Admin ✕')
 
         self._load_settings()
@@ -101,78 +112,14 @@ class App(tk.Tk):
         self.after(2200, self._autoload_saved_subscription)
         self.after(4500, lambda: self.check_for_updates(manual=False))
         self.after(1500, self._poll_system_theme)
+        self.after(1800, self._poll_runner_health)
 
     # ---------------- Тема ----------------
-    def _resolved_theme(self) -> str:
-        mode = self.theme_mode_var.get()
-        if mode == 'system':
-            return detect_windows_theme()
-        return mode if mode in PALETTES else 'dark'
 
-    def _style(self):
-        p = self.palette
-        self.configure(bg=p['root'])
-        s = ttk.Style(self)
-        try:
-            s.theme_use('clam')
-        except Exception:
-            pass
-        s.configure('TFrame', background=p['root'])
-        s.configure('Card.TFrame', background=p['card'])
-        s.configure('TButton', font=('Segoe UI', 10), padding=(10, 7), background=p['card2'], foreground=p['text'], bordercolor=p['border'])
-        s.map('TButton', background=[('active', p['segment_hover'])], foreground=[('disabled', p['muted'])])
-        s.configure('Primary.TButton', font=('Segoe UI Semibold', 10), padding=(10, 7), background=p['accent'], foreground=p['accent_text'], bordercolor=p['accent'])
-        s.map('Primary.TButton', background=[('active', p['accent_hover']), ('disabled', p['border'])], foreground=[('disabled', p['muted'])])
-        s.configure('Treeview', background=p['card'], fieldbackground=p['card'], foreground=p['text'], rowheight=28, borderwidth=0, font=('Segoe UI', 10))
-        s.configure('Treeview.Heading', background=p['card2'], foreground=p['text'], relief='flat', font=('Segoe UI Semibold', 9))
-        s.map('Treeview', background=[('selected', p['selection'])], foreground=[('selected', p['text'])])
-        s.configure('Vertical.TScrollbar', background=p['card2'], troughcolor=p['card'], bordercolor=p['border'], arrowcolor=p['text'])
 
-    def _sync_titlebar_theme(self):
-        if os.name != 'nt':
-            return
-        try:
-            hwnd = self.winfo_id()
-            dark = ctypes.c_int(1 if self.current_theme == 'dark' else 0)
-            dwm = ctypes.windll.dwmapi
-            if dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark)) != 0:
-                dwm.DwmSetWindowAttribute(hwnd, 19, ctypes.byref(dark), ctypes.sizeof(dark))
-        except Exception:
-            pass
 
-    def _set_theme_mode(self, mode: str):
-        if mode not in THEME_LABELS:
-            return
-        self.theme_mode_var.set(mode)
-        self._save_settings()
-        resolved = self._resolved_theme()
-        if resolved != self.current_theme:
-            self.current_theme = resolved
-            self.palette = PALETTES[resolved]
-            self._rebuild_ui()
-        else:
-            self._refresh_theme_buttons()
-            self._sync_titlebar_theme()
 
-    def _refresh_theme_buttons(self):
-        if not hasattr(self, 'theme_buttons'):
-            return
-        p = self.palette
-        mode = self.theme_mode_var.get()
-        for key, btn in self.theme_buttons.items():
-            if key == mode:
-                btn.configure(bg=p['accent'], fg=p['accent_text'], activebackground=p['accent_hover'], activeforeground=p['accent_text'])
-            else:
-                btn.configure(bg=p['segment'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'])
 
-    def _poll_system_theme(self):
-        if self.theme_mode_var.get() == 'system':
-            resolved = detect_windows_theme()
-            if resolved != self.current_theme:
-                self.current_theme = resolved
-                self.palette = PALETTES[resolved]
-                self._rebuild_ui()
-        self.after(1500, self._poll_system_theme)
 
     # ---------------- Интерфейс ----------------
     def _menu_button(self, parent, text, active=False, command=None):
@@ -263,6 +210,9 @@ class App(tk.Tk):
         tk.Button(self.advanced, text='Обновить списки', command=self._manual_update_lists, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=5).grid(row=2, column=0, pady=(10, 0), sticky='w')
         tk.Button(self.advanced, text='Установить / обновить ядра', command=lambda: self._install_cores(manual=True), bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=5).grid(row=2, column=1, pady=(10, 0), sticky='w', padx=(8,0))
         tk.Label(self.advanced, textvariable=self.block_var, bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9)).grid(row=2, column=2, columnspan=4, sticky='w', pady=(10, 0), padx=(8,0))
+        tk.Button(self.advanced, text='Приложения VPN', command=self.open_app_manager, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=5).grid(row=3, column=0, pady=(10, 0), sticky='w')
+        tk.Label(self.advanced, textvariable=self.custom_apps_var, bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9)).grid(row=3, column=1, columnspan=3, sticky='w', pady=(10, 0), padx=(8,0))
+        tk.Checkbutton(self.advanced, text='Автопереподключение', variable=self.auto_reconnect_var, command=self._save_settings, bg=p['card'], fg=p['text'], activebackground=p['card'], activeforeground=p['text'], selectcolor=p['card2'], bd=0).grid(row=3, column=4, columnspan=2, sticky='e', pady=(10, 0))
         if self.advanced_open:
             self.advanced.pack(fill='x', padx=10, pady=(0, 10))
 
@@ -330,9 +280,9 @@ class App(tk.Tk):
         # Нижняя строка состояния
         bottom = tk.Frame(outer, bg=p['card'], highlightbackground=p['border'], highlightthickness=1)
         bottom.pack(fill='x', padx=12, pady=(0, 10))
-        self.bottom_left = tk.Label(bottom, text='Локальный: mixed:10808', bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9), padx=10, pady=7)
+        self.bottom_left = tk.Label(bottom, text='TUN: system · MTU 1400', bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9), padx=10, pady=7)
         self.bottom_left.pack(side='left')
-        self.bottom_center = tk.Label(bottom, text='TUN: управляется ProstoKVN Network', bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9), padx=10, pady=7)
+        self.bottom_center = tk.Label(bottom, textvariable=self.engine_var, bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9), padx=10, pady=7)
         self.bottom_center.pack(side='left')
         self.bottom_ru = tk.Label(bottom, text='RU / SU / РФ: DIRECT', bg=p['card'], fg=p['good'], font=('Segoe UI Semibold', 9), padx=10, pady=7)
         self.bottom_ru.pack(side='left')
@@ -342,152 +292,12 @@ class App(tk.Tk):
         self.bottom_right.pack(side='right')
 
 
-    def _subscription_info_text(self) -> str:
-        alias = (self.subscription_name_var.get() or 'import_sub').strip()
-        enabled = 'On' if self.subscription_enabled_var.get() else 'Off'
-        return f'{alias}  |  URL скрыт  |  Обновление: {enabled}'
 
-    def _refresh_subscription_info(self):
-        if hasattr(self, 'subscription_info'):
-            self.subscription_info.config(text=self._subscription_info_text())
 
-    def _masked_url(self, url: str) -> str:
-        url = (url or '').strip()
-        if not url:
-            return ''
-        if len(url) <= 28:
-            return url
-        return url[:28] + '...'
 
-    def open_subscription_manager(self):
-        p = self.palette
-        if self.sub_window and self.sub_window.winfo_exists():
-            self.sub_window.focus_force()
-            return
-        win = tk.Toplevel(self)
-        self.sub_window = win
-        win.title('Настройки групп подписки')
-        win.geometry('980x520')
-        win.minsize(880, 460)
-        win.configure(bg=p['root'])
-        win.transient(self)
 
-        top = tk.Frame(win, bg=p['root'])
-        top.pack(fill='x', padx=12, pady=(10, 6))
-        tk.Button(top, text='Добавить', command=self.open_subscription_editor, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left')
-        tk.Button(top, text='Редактировать', command=self.open_subscription_editor, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left', padx=(8,0))
-        tk.Button(top, text='Обновить текущую подписку', command=self.refresh_current_subscription_from_manager, bg=p['accent'], fg=p['accent_text'], activebackground=p['accent_hover'], activeforeground=p['accent_text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left', padx=(8,0))
-        tk.Button(top, text='Закрыть', command=win.destroy, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='right')
 
-        table_frame = tk.Frame(win, bg=p['card'], highlightbackground=p['border'], highlightthickness=1)
-        table_frame.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        cols = ('alias','url','enabled','interval','sort')
-        tree = ttk.Treeview(table_frame, columns=cols, show='headings', selectmode='browse')
-        tree.heading('alias', text='Псевдоним')
-        tree.heading('url', text='URL (необязательно)')
-        tree.heading('enabled', text='Включить')
-        tree.heading('interval', text='Интервал автом')
-        tree.heading('sort', text='Сортир')
-        tree.column('alias', width=200, anchor='w')
-        tree.column('url', width=500, anchor='w')
-        tree.column('enabled', width=90, anchor='center')
-        tree.column('interval', width=110, anchor='center')
-        tree.column('sort', width=80, anchor='center')
-        tree.pack(fill='both', expand=True, padx=8, pady=8)
-        self.sub_list_tree = tree
-        self._refresh_subscription_list()
-        tree.bind('<Double-Button-1>', lambda _e: self.open_subscription_editor())
 
-    def _refresh_subscription_list(self):
-        if not hasattr(self, 'sub_list_tree') or not self.sub_list_tree.winfo_exists():
-            return
-        tree = self.sub_list_tree
-        for item in tree.get_children():
-            tree.delete(item)
-        tree.insert('', 'end', iid='current', values=(
-            self.subscription_name_var.get().strip() or 'import_sub',
-            self._masked_url(self.url_var.get().strip()),
-            '✓' if self.subscription_enabled_var.get() else '',
-            self.subscription_interval_var.get().strip() or '0',
-            self.subscription_sort_var.get().strip() or '1',
-        ))
-        tree.selection_set('current')
-
-    def open_subscription_editor(self):
-        p = self.palette
-        if self.sub_editor and self.sub_editor.winfo_exists():
-            self.sub_editor.focus_force()
-            return
-        win = tk.Toplevel(self)
-        self.sub_editor = win
-        win.title('Настройки групп подписки')
-        win.geometry('760x470')
-        win.minsize(700, 430)
-        win.configure(bg=p['root'])
-        win.transient(self)
-
-        alias_var = tk.StringVar(value=self.subscription_name_var.get() or 'import_sub')
-        url_var = tk.StringVar(value=self.url_var.get())
-        enabled_var = tk.BooleanVar(value=self.subscription_enabled_var.get())
-        interval_var = tk.StringVar(value=self.subscription_interval_var.get() or '0')
-        sort_var = tk.StringVar(value=self.subscription_sort_var.get() or '1')
-
-        content = tk.Frame(win, bg=p['root'])
-        content.pack(fill='both', expand=True, padx=16, pady=16)
-
-        def row(r, label, widget):
-            tk.Label(content, text=label, bg=p['root'], fg=p['text'], font=('Segoe UI Semibold', 10)).grid(row=r, column=0, sticky='w', pady=8)
-            widget.grid(row=r, column=1, sticky='ew', pady=8)
-        content.grid_columnconfigure(1, weight=1)
-
-        alias_entry = tk.Entry(content, textvariable=alias_var, bg=p['card2'], fg=p['text'], insertbackground=p['text'], relief='flat', font=('Segoe UI', 11), bd=0)
-        alias_entry.configure(highlightthickness=1, highlightbackground=p['accent'])
-        row(0, 'Псевдоним', alias_entry)
-        url_entry = tk.Entry(content, textvariable=url_var, bg=p['card2'], fg=p['text'], insertbackground=p['text'], relief='flat', font=('Consolas', 10), bd=0)
-        row(1, 'URL (необязательно)', url_entry)
-        self._bind_paste(url_entry)
-
-        toggle_row = tk.Frame(content, bg=p['root'])
-        sw = tk.Checkbutton(toggle_row, text='On', variable=enabled_var, bg=p['root'], fg=p['text'], activebackground=p['root'], activeforeground=p['text'], selectcolor=p['card2'], font=('Segoe UI', 11), bd=0, relief='flat')
-        sw.pack(side='left')
-        tk.Label(toggle_row, text='Интервал автоматического обновления', bg=p['root'], fg=p['text'], font=('Segoe UI', 11)).pack(side='left', padx=(14,10))
-        inter_entry = tk.Entry(toggle_row, textvariable=interval_var, width=6, bg=p['card2'], fg=p['text'], insertbackground=p['text'], relief='flat', font=('Segoe UI', 11), bd=0)
-        inter_entry.pack(side='left')
-        toggle_row.grid(row=2, column=1, sticky='w', pady=8)
-        tk.Label(content, text='Включить обновление', bg=p['root'], fg=p['text'], font=('Segoe UI Semibold', 10)).grid(row=2, column=0, sticky='w', pady=8)
-
-        sort_entry = tk.Entry(content, textvariable=sort_var, width=8, bg=p['card2'], fg=p['text'], insertbackground=p['text'], relief='flat', font=('Segoe UI', 11), bd=0)
-        row(3, 'Сортировка', sort_entry)
-
-        help_label = tk.Label(content, text='URL подписки скрыт на главном экране и хранится только в настройках группы.', bg=p['root'], fg=p['muted'], font=('Segoe UI', 9))
-        help_label.grid(row=4, column=0, columnspan=2, sticky='w', pady=(12, 0))
-
-        btns = tk.Frame(content, bg=p['root'])
-        btns.grid(row=5, column=0, columnspan=2, pady=(24, 0))
-
-        def save_and_maybe_refresh(refresh_now=False):
-            self.subscription_name_var.set((alias_var.get() or 'import_sub').strip() or 'import_sub')
-            self.url_var.set(url_var.get().strip())
-            self.subscription_enabled_var.set(bool(enabled_var.get()))
-            self.subscription_interval_var.set(interval_var.get().strip() or '0')
-            self.subscription_sort_var.set(sort_var.get().strip() or '1')
-            self._save_settings()
-            self._refresh_subscription_info()
-            self._refresh_subscription_list()
-            self._append_log(f"[SUB] Сохранена группа подписки: {self.subscription_name_var.get()}")
-            if refresh_now or self.url_var.get().strip():
-                self.after(100, lambda: self.start_test(auto=False))
-            win.destroy()
-
-        tk.Button(btns, text='Подтвердить', command=lambda: save_and_maybe_refresh(False), bg=p['accent'], fg=p['accent_text'], activebackground=p['accent_hover'], activeforeground=p['accent_text'], relief='flat', bd=0, padx=14, pady=7).pack(side='left')
-        tk.Button(btns, text='Сохранить и обновить', command=lambda: save_and_maybe_refresh(True), bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=14, pady=7).pack(side='left', padx=(8,0))
-        tk.Button(btns, text='Отмена', command=win.destroy, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=14, pady=7).pack(side='left', padx=(8,0))
-
-    def refresh_current_subscription_from_manager(self):
-        self._save_settings()
-        self._refresh_subscription_info()
-        self._append_log('[SUB] Обновляю текущую подписку из менеджера...')
-        self.start_test(auto=False)
 
 
     def _make_summary_card(self, parent, title: str, variable: tk.StringVar):
@@ -505,9 +315,11 @@ class App(tk.Tk):
             udp = 'UDP OK' if active_node.udp_ok else 'UDP OFF'
             self.node_info_var.set(active_node.name)
             self.route_info_var.set(f'{active_node.stack_label()} · {ping} · {udp}')
+            self.engine_var.set(f'Ядро: {active_node.engine_label()}')
         else:
             self.node_info_var.set('—')
             self.route_info_var.set('—')
+            self.engine_var.set('Ядро: —')
 
         strategy_key = self.applied_strategy_key if (self.runner and self.runner.running() and self.applied_strategy_key) else self.strategy_key_var.get()
         self.strategy_info_var.set(STRATEGIES.get(strategy_key, '—'))
@@ -626,42 +438,135 @@ class App(tk.Tk):
         else:
             self.advanced.pack_forget()
 
+    # ---------------- Приложения и watchdog ----------------
+    def _refresh_custom_apps_label(self):
+        if not hasattr(self, 'custom_apps_var'):
+            return
+        if self.custom_vpn_processes:
+            preview = ', '.join(self.custom_vpn_processes[:3])
+            if len(self.custom_vpn_processes) > 3:
+                preview += f' +{len(self.custom_vpn_processes) - 3}'
+            self.custom_apps_var.set(f'Приложения VPN: {preview}')
+        else:
+            self.custom_apps_var.set('Приложения VPN: не выбраны')
+
+    def open_app_manager(self):
+        p = self.palette
+        window = tk.Toplevel(self)
+        window.title('Приложения через VPN')
+        window.geometry('560x420')
+        window.minsize(500, 360)
+        window.configure(bg=p['root'])
+        window.transient(self)
+
+        tk.Label(window, text='Эти EXE будут идти через VPN в режимах Smart и «Приложения».', bg=p['root'], fg=p['text'], font=('Segoe UI', 10)).pack(anchor='w', padx=14, pady=(14, 8))
+        frame = tk.Frame(window, bg=p['card'], highlightbackground=p['border'], highlightthickness=1)
+        frame.pack(fill='both', expand=True, padx=14, pady=(0, 10))
+        listbox = tk.Listbox(frame, bg=p['card'], fg=p['text'], selectbackground=p['selection'], relief='flat', bd=0, font=('Segoe UI', 10))
+        listbox.pack(fill='both', expand=True, padx=8, pady=8)
+        self.app_listbox = listbox
+        self._refresh_app_listbox()
+
+        buttons = tk.Frame(window, bg=p['root'])
+        buttons.pack(fill='x', padx=14, pady=(0, 14))
+        tk.Button(buttons, text='Добавить EXE', command=self._add_vpn_app, bg=p['accent'], fg=p['accent_text'], activebackground=p['accent_hover'], activeforeground=p['accent_text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left')
+        tk.Button(buttons, text='Удалить', command=self._remove_vpn_app, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left', padx=(8, 0))
+        tk.Button(buttons, text='Закрыть', command=window.destroy, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='right')
+
+    def _refresh_app_listbox(self):
+        listbox = getattr(self, 'app_listbox', None)
+        if not listbox or not listbox.winfo_exists():
+            return
+        listbox.delete(0, 'end')
+        for name in self.custom_vpn_processes:
+            listbox.insert('end', name)
+
+    def _add_vpn_app(self):
+        path = filedialog.askopenfilename(title='Выберите приложение', filetypes=[('Windows EXE', '*.exe')])
+        if not path:
+            return
+        name = Path(path).name
+        self.custom_vpn_processes = normalize_process_names(self.custom_vpn_processes + [name])
+        self._save_settings()
+        self._refresh_custom_apps_label()
+        self._refresh_app_listbox()
+        self._append_log(f'[ROUTE] Добавлено приложение через VPN: {name}')
+
+    def _remove_vpn_app(self):
+        listbox = getattr(self, 'app_listbox', None)
+        if not listbox or not listbox.winfo_exists():
+            return
+        selection = listbox.curselection()
+        if not selection:
+            return
+        name = str(listbox.get(selection[0]))
+        self.custom_vpn_processes = [item for item in self.custom_vpn_processes if item.lower() != name.lower()]
+        self._save_settings()
+        self._refresh_custom_apps_label()
+        self._refresh_app_listbox()
+        self._append_log(f'[ROUTE] Удалено приложение из VPN: {name}')
+
+    def _poll_runner_health(self):
+        runner = self.runner
+        if runner and not runner.running():
+            reason = runner.failure_reason()
+            self.runner = None
+            self.applied_strategy_key = None
+            self.applied_node = None
+            self.start_btn.configure(state='normal' if self.selected_node else 'disabled')
+            self.apply_btn.configure(state='disabled')
+            self.stop_btn.configure(state='disabled')
+            self.status_var.set('VPN неожиданно остановлен')
+            self._append_log('[WATCHDOG] VPN-процесс завершился неожиданно')
+            if reason:
+                self._append_log('[WATCHDOG] ' + reason.replace('\n', ' | '))
+            self._refresh_header_summary()
+
+            if self.auto_reconnect_var.get() and self.selected_node and not self._auto_reconnect_attempted:
+                self._auto_reconnect_attempted = True
+                self.status_var.set('VPN остановлен. Пробую переподключиться...')
+                self._append_log('[WATCHDOG] Автоматическое переподключение через 2 секунды')
+                self.after(2000, self.start_vpn)
+
+        self.after(1500, self._poll_runner_health)
+
     # ---------------- Настройки ----------------
     def _load_settings(self):
-        try:
-            data = json.loads(SETTINGS_PATH.read_text(encoding='utf-8'))
-        except Exception:
-            data = {}
-        self.url_var.set(str(data.get('subscription_url') or ''))
-        self.subscription_name_var.set(str(data.get('subscription_name') or 'import_sub'))
-        self.subscription_enabled_var.set(bool(data.get('subscription_enabled', True)))
-        self.subscription_interval_var.set(str(data.get('subscription_interval') or '0'))
-        self.subscription_sort_var.set(str(data.get('subscription_sort') or '1'))
+        data = load_settings(SETTINGS_PATH)
+        self.subscriptions, self.active_subscription_id = load_subscriptions(data)
+        self._load_active_subscription_vars()
+
         self.singbox_var.set(str(data.get('singbox_path') or ''))
         self.xray_var.set(str(data.get('xray_path') or ''))
+
         strategy = str(data.get('route_strategy') or 'smart_ru')
         self.strategy_key_var.set(strategy if strategy in STRATEGIES else 'smart_ru')
+
         theme = str(data.get('theme_mode') or 'system')
         self.theme_mode_var.set(theme if theme in THEME_LABELS else 'system')
 
+        self.custom_vpn_processes = normalize_process_names(data.get('custom_vpn_processes') or [])
+        self.auto_reconnect_var.set(bool(data.get('auto_reconnect', True)))
+        self._refresh_custom_apps_label()
+
     def _save_settings(self):
+        self._store_active_subscription_from_vars()
         data = {
-            'subscription_url': self.url_var.get().strip(),
-            'subscription_name': self.subscription_name_var.get().strip() or 'import_sub',
-            'subscription_enabled': bool(self.subscription_enabled_var.get()),
-            'subscription_interval': self.subscription_interval_var.get().strip() or '0',
-            'subscription_sort': self.subscription_sort_var.get().strip() or '1',
+            'subscriptions': dump_subscriptions(self.subscriptions),
+            'active_subscription_id': self.active_subscription_id,
             'singbox_path': self.singbox_var.get().strip(),
             'xray_path': self.xray_var.get().strip(),
             'route_strategy': self.strategy_key_var.get(),
             'theme_mode': self.theme_mode_var.get(),
+            'custom_vpn_processes': list(self.custom_vpn_processes),
+            'auto_reconnect': bool(self.auto_reconnect_var.get()),
             'test_limit': 48,
         }
         try:
-            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            SETTINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-        except Exception:
-            pass
+            save_settings(SETTINGS_PATH, data)
+        except Exception as exc:
+            if hasattr(self, 'logbox'):
+                self._append_log(f'[SETTINGS] Ошибка сохранения: {exc}')
 
     # ---------------- Буфер обмена ----------------
     def _clipboard_win32(self) -> str:
@@ -817,11 +722,15 @@ class App(tk.Tk):
             self.events.put(('lists_error', str(exc)))
 
     def _autoload_saved_subscription(self):
-        url = self.url_var.get().strip()
+        item = self._active_subscription()
+        if not item or not item.enabled:
+            return
+        url = item.url.strip()
         if url.startswith(('http://', 'https://')) and not self.busy and not (self.runner and self.runner.running()):
+            self.url_var.set(url)
             self.status_var.set('Автоматически загружаю сохранённую подписку...')
             self._refresh_header_summary()
-            self._append_log('[SUB] Автоматическая загрузка сохранённой подписки')
+            self._append_log(f'[SUB] Автоматическая загрузка: {item.name}')
             self.start_test(auto=True)
 
     # ---------------- События ----------------
@@ -845,6 +754,7 @@ class App(tk.Tk):
                     else:
                         applied_key, applied_node = self.strategy_key_var.get(), self.selected_node
                     self.applied_strategy_key = str(applied_key)
+                    self._auto_reconnect_attempted = False
                     self.applied_node = applied_node if isinstance(applied_node, Node) else self.selected_node
                     if self.applied_node:
                         self.selected_node = self.applied_node
@@ -1139,10 +1049,14 @@ class App(tk.Tk):
     def _finish(self, tested: list[Node]):
         self.busy = False
         self.test_btn.configure(state='normal')
-        good = [n for n in tested if n.valid and n.udp_ok and n.https_ms is not None]
+        good = [n for n in tested if n.valid and n.https_ms is not None]
         good.sort(key=lambda n: n.score, reverse=True)
         all_sorted = sorted(tested, key=lambda n: n.score, reverse=True)
         self.tested_nodes = all_sorted
+        active_subscription = self._active_subscription()
+        if active_subscription:
+            touch_subscription(active_subscription)
+            self._save_settings()
         best = good[0] if good else (all_sorted[0] if all_sorted else None)
         self.selected_node = best
         self._refresh_tree()
@@ -1234,11 +1148,10 @@ class App(tk.Tk):
             discord_vpn=True,
             steam_webhelper_vpn=False,
             xray=self.xray,
-            force_game_vpn=True,
             blocked_ru_vpn=(route_mode == 'smart_ru'),
             blocklist_paths=paths,
             route_mode=route_mode,
-            discord_mode='all_vpn',
+            custom_vpn_processes=self.custom_vpn_processes,
         )
 
     def start_vpn(self):
@@ -1291,6 +1204,7 @@ class App(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def stop_vpn(self, silent: bool = False):
+        self._auto_reconnect_attempted = False
         runner = self.runner
         self.runner = None
         if runner:
