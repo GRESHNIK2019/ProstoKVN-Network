@@ -1,49 +1,34 @@
 # Бесплатная подпись через SignPath Foundation
 
-Для ProstoKVN Network используем бесплатную Authenticode-подпись для open-source проектов через SignPath Foundation.
+Для ProstoKVN Network используется бесплатная Authenticode-подпись для подходящих open-source проектов через SignPath Foundation.
 
-## Почему этот вариант
+Проект лицензирован по `GPL-3.0-or-later`, а публичные релизы должны собираться GitHub Actions из исходников этого репозитория.
 
-- Подпись предназначена для Windows Authenticode.
-- Для подходящих OSS-проектов SignPath Foundation предоставляет сертификат и SignPath.io бесплатно.
-- Приватный ключ хранится на стороне SignPath, а не в GitHub Secrets.
-- GitHub Actions может отправлять собранный EXE на подпись автоматически.
+## Перед подачей заявки
 
-## Важные условия SignPath Foundation
+Нужно выполнить требования SignPath Foundation:
 
-Бесплатная программа предназначена только для настоящих open-source проектов. Проект должен:
+- публичный репозиторий;
+- OSI-approved лицензия для собственного кода;
+- отсутствие собственного proprietary-кода в подписываемом продукте;
+- активная поддержка;
+- опубликованный релиз;
+- документированная функциональность;
+- раздел `Code signing policy` на главной странице проекта;
+- privacy policy;
+- включённая MFA для GitHub и SignPath.
 
-- использовать OSI-approved Open Source License;
-- не содержать собственного закрытого/proprietary кода;
-- быть активно поддерживаемым;
-- уже иметь опубликованный релиз;
-- иметь описание функциональности и страницу загрузки.
+## После одобрения
 
-Пока лицензия не выбрана и заявка SignPath Foundation не одобрена, workflow продолжает собирать EXE как CI artifact, но не публикует его как подписанный Release.
-
-## GitHub Secret
-
-После одобрения SignPath добавить:
+В GitHub Actions добавить secret:
 
 - `SIGNPATH_API_TOKEN`
 
-## GitHub Variables
-
-Добавить:
+И variables:
 
 - `SIGNPATH_ORG_ID`
 - `SIGNPATH_PROJECT_SLUG`
 - `SIGNPATH_POLICY_SLUG`
-- `SIGNPATH_ENABLED` = `true`
+- `SIGNPATH_ENABLED=true`
 
-## Как работает workflow
-
-1. PyInstaller собирает `ProstoKVNNetwork.exe`.
-2. GitHub загружает неподписанный EXE как workflow artifact.
-3. `signpath/github-action-submit-signing-request@v2` отправляет artifact в SignPath.
-4. SignPath возвращает подписанный EXE.
-5. Workflow заменяет неподписанный файл подписанным.
-6. `Get-AuthenticodeSignature` обязан вернуть `Valid`.
-7. Только после этого создаются SHA-256 и публичный GitHub Release.
-
-Самоподписанные сертификаты для публичных релизов не используются.
+После этого workflow отправит GitHub workflow artifact в SignPath, дождётся подписанного EXE, проверит Authenticode и только затем опубликует Release.
