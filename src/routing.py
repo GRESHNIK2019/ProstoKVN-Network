@@ -151,8 +151,8 @@ def build_route_rules(
         {"process_name": PROTECTED_DIRECT, "action": "route", "outbound": "direct"},
     ]
 
-    # Пользовательские правила идут до встроенных: пользователь может, например,
-    # явно отправить Discord или Steam через VPN либо заблокировать домен/IP.
+    # Пользовательские правила имеют самый высокий приоритет после защиты
+    # собственных VPN-ядер.
     rules.extend(_custom_route_rules(custom_route_rules or []))
 
     custom = normalize_process_names(custom_vpn_processes or [])
@@ -172,19 +172,21 @@ def build_route_rules(
     if steam_webhelper_vpn:
         rules.append({"process_name": ["steamwebhelper.exe"], "action": "route", "outbound": "proxy"})
 
-    # Российские доменные зоны остаются напрямую во всех стратегиях, если их не
-    # переопределило пользовательское правило выше.
-    rules.append({
-        "domain_suffix": RU_DIRECT_DOMAIN_SUFFIXES,
-        "action": "route",
-        "outbound": "direct",
-    })
-
+    # В Smart блокируемые домены/IP должны проверяться ДО общего правила
+    # RU/SU/РФ -> DIRECT, иначе заблокированный .ru-домен уйдёт напрямую.
     rule_definitions: list[dict[str, Any]] = []
     if route_mode == "smart_ru" and blocked_ru_vpn and blocklist_paths:
         rule_definitions, tags = _rule_sets_for_paths(blocklist_paths)
         if tags:
             rules.append({"rule_set": tags, "action": "route", "outbound": "proxy"})
+
+    # Российские доменные зоны остаются напрямую, если их не переопределило
+    # пользовательское правило или более приоритетный Smart rule-set.
+    rules.append({
+        "domain_suffix": RU_DIRECT_DOMAIN_SUFFIXES,
+        "action": "route",
+        "outbound": "direct",
+    })
 
     final_outbound = "proxy" if route_mode == "global" else "direct"
     return rules, rule_definitions, final_outbound
@@ -226,6 +228,8 @@ def make_tun_config(
     if rule_definitions:
         route["rule_set"] = rule_definitions
 
+    # Clash API приложением не используется. Не поднимаем лишний локальный
+    # HTTP controller без необходимости.
     return {
         "log": {"level": "warn", "timestamp": True, "output": str(log_path)},
         "dns": {
@@ -247,10 +251,4 @@ def make_tun_config(
         }],
         "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
         "route": route,
-        "experimental": {
-            "clash_api": {
-                "external_controller": "127.0.0.1:19181",
-                "secret": "",
-            }
-        },
     }

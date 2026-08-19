@@ -9,13 +9,12 @@ _INSTALLED = False
 
 
 def install_xray_config_compat() -> None:
-    """Нормализует VLESS streamSettings под актуальный формат Xray-core.
+    """Нормализует VLESS streamSettings для совместимости версий Xray-core.
 
-    В старом генераторе транспорт записывался в поле ``method``. Xray-core
-    ожидает ``network``; неизвестное поле игнорируется, поэтому Xray запускал
-    локальный SOCKS, но пытался подключаться транспортом RAW. В результате WS,
-    gRPC и XHTTP выглядели как рабочий Xray-процесс, однако HTTPS-проверка
-    всегда завершалась ошибкой.
+    Часть установленных у пользователей Xray-core ожидает традиционные поля
+    ``network`` и ``publicKey``. Более новые версии принимают также алиасы
+    ``method`` и ``password``, но использование только новых алиасов ломает
+    совместимость со старыми уже установленными ядрами.
     """
     global _INSTALLED
     if _INSTALLED:
@@ -34,14 +33,10 @@ def install_xray_config_compat() -> None:
         if not isinstance(stream, dict):
             return outbound
 
-        # Xray-core использует streamSettings.network. Поле method относится к
-        # HTTP-заголовкам и не выбирает транспорт соединения.
         method = stream.pop("method", None)
         if method and not stream.get("network"):
             stream["network"] = method
 
-        # password пока принимается Xray как legacy-alias publicKey, но в новых
-        # конфигурациях используем официальное имя поля.
         reality = stream.get("realitySettings")
         if isinstance(reality, dict):
             password = reality.pop("password", None)

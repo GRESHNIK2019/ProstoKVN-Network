@@ -11,9 +11,9 @@ from typing import Any
 from xray_compat import install_xray_config_compat
 
 
-# node_tester загружается раньше routing/settings_store в основном приложении и
-# в vpn_runner. Здесь ставим небольшой compatibility-layer до первого запуска
-# проверки узлов или Xray-моста.
+# node_tester загружается раньше routing/settings_store в основном приложении.
+# Ставим compatibility-layer до первой проверки узлов и запуска Xray-моста,
+# чтобы уже установленное у пользователя ядро не ломалось из-за различий схемы.
 install_xray_config_compat()
 
 

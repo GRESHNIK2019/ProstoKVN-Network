@@ -61,6 +61,45 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(config["route"]["final"], "proxy")
         self.assertTrue(any(".xn--p1ai" in rule.get("domain_suffix", []) for rule in config["route"]["rules"]))
 
+    def test_smart_blocklist_precedes_ru_direct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ruleset = Path(directory) / "blocked.srs"
+            ruleset.write_bytes(b"test")
+            rules, definitions, _ = build_route_rules(
+                "smart_ru",
+                blocked_ru_vpn=True,
+                blocklist_paths=[ruleset],
+            )
+
+        self.assertEqual(len(definitions), 1)
+        block_index = next(index for index, rule in enumerate(rules) if rule.get("rule_set"))
+        ru_index = next(index for index, rule in enumerate(rules) if ".ru" in rule.get("domain_suffix", []))
+        self.assertLess(block_index, ru_index)
+
+    def test_user_rule_precedes_builtin_steam_rule(self):
+        rules, _, _ = build_route_rules(
+            "smart_ru",
+            custom_route_rules=[{"type": "process", "value": "steam.exe", "action": "proxy"}],
+        )
+        user_index = next(
+            index for index, rule in enumerate(rules)
+            if rule.get("process_name") == ["steam.exe"] and rule.get("outbound") == "proxy"
+        )
+        builtin_index = next(
+            index for index, rule in enumerate(rules)
+            if "steam.exe" in rule.get("process_name", []) and rule.get("outbound") == "direct"
+        )
+        self.assertLess(user_index, builtin_index)
+
+    def test_tun_config_does_not_expose_unused_clash_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = make_tun_config(
+                self.make_node(),
+                Path(directory) / "tun.log",
+                route_mode="smart_ru",
+            )
+        self.assertNotIn("experimental", config)
+
 
 if __name__ == "__main__":
     unittest.main()

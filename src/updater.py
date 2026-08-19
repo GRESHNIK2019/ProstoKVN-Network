@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 import urllib.request
 
+from app_config import UPDATE_SIGNER_SUBJECTS
+
 
 def version_tuple(value: str) -> tuple[int, ...]:
     value = str(value or "").strip().lower().lstrip("v")
@@ -110,10 +112,24 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest().lower()
 
 
-def verify_authenticode(path: Path) -> str:
-    """Проверяет, что Windows доверяет Authenticode-подписи загруженного EXE."""
+def signer_subject_is_allowed(subject: str, allowed_subjects: tuple[str, ...] | list[str]) -> bool:
+    """Проверяет издателя без зависимости от порядка полей X.509 Subject."""
+    normalized = str(subject or "").casefold()
+    if not normalized:
+        return False
+    expected = [str(value or "").strip().casefold() for value in allowed_subjects]
+    expected = [value for value in expected if value]
+    return bool(expected) and any(value in normalized for value in expected)
+
+
+def verify_authenticode(path: Path, allowed_subjects: tuple[str, ...] | list[str] | None = None) -> str:
+    """Проверяет доверие Windows и ожидаемого издателя Authenticode-подписи."""
     if os.name != "nt":
         return "not-windows"
+
+    allowed = tuple(allowed_subjects or UPDATE_SIGNER_SUBJECTS)
+    if not allowed:
+        raise RuntimeError("Не задан доверенный издатель обновлений.")
 
     escaped = str(path.resolve()).replace("'", "''")
     script = (
@@ -143,6 +159,11 @@ def verify_authenticode(path: Path) -> str:
     subject = str(data.get("Subject") or "")
     if status != "Valid":
         raise RuntimeError(f"Цифровая подпись обновления недействительна: {status or 'Unknown'}.")
+    if not signer_subject_is_allowed(subject, allowed):
+        raise RuntimeError(
+            "Обновление подписано неизвестным издателем: "
+            + (subject or "сертификат не содержит Subject")
+        )
     return subject
 
 

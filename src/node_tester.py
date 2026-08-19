@@ -35,9 +35,26 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _csv_value(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(item) for item in value if str(item))
+    return str(value or "")
+
+
+def _header_value(headers: Any, name: str) -> str:
+    if not isinstance(headers, dict):
+        return ""
+    wanted = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == wanted:
+            return str(value or "")
+    return ""
+
+
 def _node_query(node: Node) -> dict[str, str]:
+    """Возвращает Xray-параметры VLESS независимо от формата подписки."""
     query = node.extra.get("query")
-    if isinstance(query, dict):
+    if isinstance(query, dict) and query:
         return {str(key): str(value) for key, value in query.items()}
 
     if node.source.lower().startswith("vless://"):
@@ -45,15 +62,137 @@ def _node_query(node: Node) -> dict[str, str]:
         values = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         return {key: (items[0] if items else "") for key, items in values.items()}
 
+    result: dict[str, str] = {}
+
+    # VLESS из sing-box JSON и нормализованный Clash outbound уже содержит
+    # transport/tls в структурированном виде. Переводим их обратно в поля,
+    # которые использует Xray builder.
+    outbound = node.outbound if isinstance(node.outbound, dict) else {}
+    if outbound.get("flow"):
+        result["flow"] = str(outbound.get("flow") or "")
+
+    transport = outbound.get("transport")
+    if isinstance(transport, dict):
+        transport_type = str(transport.get("type") or "raw").lower()
+        result["type"] = transport_type
+        if transport.get("path"):
+            result["path"] = str(transport.get("path") or "")
+        host = transport.get("host")
+        if isinstance(host, list):
+            host = host[0] if host else ""
+        if host:
+            result["host"] = str(host)
+        headers = transport.get("headers")
+        header_host = _header_value(headers, "host")
+        if header_host and not result.get("host"):
+            result["host"] = header_host
+        if isinstance(headers, dict) and headers:
+            result["_headers"] = json.dumps(headers, ensure_ascii=False)
+        service = transport.get("service_name") or transport.get("serviceName")
+        if service:
+            result["serviceName"] = str(service)
+        if transport.get("authority"):
+            result["authority"] = str(transport.get("authority") or "")
+        if transport.get("mode"):
+            result["mode"] = str(transport.get("mode") or "")
+        if isinstance(transport.get("extra"), dict):
+            result["extra"] = json.dumps(transport["extra"], ensure_ascii=False)
+
+    tls = outbound.get("tls")
+    if isinstance(tls, dict) and _bool(tls.get("enabled", True)):
+        reality = tls.get("reality") if isinstance(tls.get("reality"), dict) else None
+        result["security"] = "reality" if reality else "tls"
+        if tls.get("server_name"):
+            result["sni"] = str(tls.get("server_name") or "")
+        if tls.get("insecure") is not None:
+            result["allowInsecure"] = "true" if _bool(tls.get("insecure")) else "false"
+        if tls.get("alpn"):
+            result["alpn"] = _csv_value(tls.get("alpn"))
+        utls = tls.get("utls") if isinstance(tls.get("utls"), dict) else None
+        if utls and utls.get("fingerprint"):
+            result["fp"] = str(utls.get("fingerprint") or "")
+        if reality:
+            public_key = reality.get("public_key") or reality.get("publicKey")
+            short_id = reality.get("short_id") or reality.get("shortId")
+            if public_key:
+                result["pbk"] = str(public_key)
+            if short_id:
+                result["sid"] = str(short_id)
+
+    # Clash хранит часть критичных параметров во вложенных *-opts. Они не
+    # попадали в старый scalar-only flatten и из-за этого WS/gRPC/REALITY
+    # ломались именно для YAML-подписок.
     clash = node.extra.get("clash")
     if isinstance(clash, dict):
-        result: dict[str, str] = {}
-        for key, value in clash.items():
-            if isinstance(value, (str, int, float, bool)):
-                result[str(key)] = str(value)
-        return result
+        network = str(clash.get("network") or result.get("type") or "raw").lower()
+        result["type"] = network
 
-    return {}
+        reality_opts = clash.get("reality-opts")
+        if not isinstance(reality_opts, dict):
+            reality_opts = clash.get("reality_opts")
+        if isinstance(reality_opts, dict):
+            result["security"] = "reality"
+            public_key = reality_opts.get("public-key") or reality_opts.get("public_key")
+            short_id = reality_opts.get("short-id") or reality_opts.get("short_id")
+            if public_key:
+                result["pbk"] = str(public_key)
+            if short_id:
+                result["sid"] = str(short_id)
+        elif _bool(clash.get("tls")):
+            result["security"] = "tls"
+
+        sni = clash.get("servername") or clash.get("sni")
+        if sni:
+            result["sni"] = str(sni)
+        fingerprint = clash.get("client-fingerprint") or clash.get("fingerprint")
+        if fingerprint:
+            result["fp"] = str(fingerprint)
+        if clash.get("skip-cert-verify") is not None:
+            result["allowInsecure"] = "true" if _bool(clash.get("skip-cert-verify")) else "false"
+        if clash.get("alpn"):
+            result["alpn"] = _csv_value(clash.get("alpn"))
+        if clash.get("flow"):
+            result["flow"] = str(clash.get("flow") or "")
+
+        if network in {"ws", "websocket"}:
+            opts = clash.get("ws-opts") or clash.get("ws_opts") or {}
+            if isinstance(opts, dict):
+                if opts.get("path"):
+                    result["path"] = str(opts.get("path") or "")
+                headers = opts.get("headers")
+                host = _header_value(headers, "host")
+                if host:
+                    result["host"] = host
+                if isinstance(headers, dict) and headers:
+                    result["_headers"] = json.dumps(headers, ensure_ascii=False)
+        elif network == "grpc":
+            opts = clash.get("grpc-opts") or clash.get("grpc_opts") or {}
+            if isinstance(opts, dict):
+                service = opts.get("grpc-service-name") or opts.get("service-name") or opts.get("service_name")
+                if service:
+                    result["serviceName"] = str(service)
+                if opts.get("authority"):
+                    result["authority"] = str(opts.get("authority") or "")
+        elif network == "xhttp":
+            opts = clash.get("xhttp-opts") or clash.get("xhttp_opts") or {}
+            if isinstance(opts, dict):
+                if opts.get("path"):
+                    result["path"] = str(opts.get("path") or "")
+                if opts.get("host"):
+                    result["host"] = str(opts.get("host") or "")
+                if opts.get("mode"):
+                    result["mode"] = str(opts.get("mode") or "")
+                if isinstance(opts.get("extra"), dict):
+                    result["extra"] = json.dumps(opts["extra"], ensure_ascii=False)
+        elif network in {"httpupgrade", "http-upgrade"}:
+            opts = clash.get("http-upgrade-opts") or clash.get("httpupgrade-opts") or {}
+            if isinstance(opts, dict):
+                if opts.get("path"):
+                    result["path"] = str(opts.get("path") or "")
+                if opts.get("host"):
+                    result["host"] = str(opts.get("host") or "")
+
+    return result
 
 
 def make_xray_vless_outbound(node: Node) -> dict[str, Any]:
@@ -103,6 +242,14 @@ def make_xray_vless_outbound(node: Node) -> dict[str, Any]:
             ws["path"] = path
         if host:
             ws["host"] = host
+        headers_raw = query.get("_headers", "")
+        if headers_raw:
+            try:
+                headers = json.loads(headers_raw)
+                if isinstance(headers, dict):
+                    ws["headers"] = {str(k): str(v) for k, v in headers.items()}
+            except Exception:
+                pass
         stream["wsSettings"] = ws
     elif method == "grpc":
         service = urllib.parse.unquote(

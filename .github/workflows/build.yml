@@ -139,11 +139,16 @@ jobs:
         run: |
           $signature = Get-AuthenticodeSignature "dist/ProstoKVNNetwork.exe"
           Write-Host "Signature status: $($signature.Status)"
+          $subject = ""
           if ($signature.SignerCertificate) {
-            Write-Host "Signer: $($signature.SignerCertificate.Subject)"
+            $subject = [string]$signature.SignerCertificate.Subject
+            Write-Host "Signer: $subject"
           }
           if ($signature.Status -ne 'Valid') {
             throw "The executable does not have a valid Authenticode signature."
+          }
+          if ([string]::IsNullOrWhiteSpace($subject) -or $subject -notmatch '(?i)SignPath Foundation') {
+            throw "Unexpected Authenticode publisher: $subject"
           }
 
       - name: Create hashes
