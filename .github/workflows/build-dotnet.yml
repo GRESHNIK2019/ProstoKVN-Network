@@ -47,6 +47,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project dotnet/ProstoKVN.Network.SmokeTests/ProstoKVN.Network.SmokeTests.csproj -c Release --no-build
 
+      - name: Restore WinUI publish runtime
+        shell: pwsh
+        run: dotnet restore dotnet/ProstoKVN.Network.App/ProstoKVN.Network.App.csproj -r win-x64
+
       - name: Publish WinUI x64
         shell: pwsh
         run: >-
