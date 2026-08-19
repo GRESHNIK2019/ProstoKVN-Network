@@ -20,6 +20,7 @@ from routing import make_tun_config, normalize_process_names
 # Одновременно запускаем или останавливаем только один VPN-сеанс.
 # Это защищает от гонки при быстрых переключениях стратегии.
 _VPN_LIFECYCLE_LOCK = threading.RLock()
+TUN_INTERFACE_NAME = "prostokvn_network_tun"
 
 
 def is_admin() -> bool:
@@ -109,6 +110,33 @@ def _kill_stale_runtime_processes(config_paths: list[Path]) -> None:
         )
     except Exception:
         pass
+
+
+def _wait_tun_interface(
+    name: str,
+    process: subprocess.Popen[Any] | None,
+    xray_process: subprocess.Popen[Any] | None = None,
+    require_xray: bool = False,
+    timeout: float = 8.0,
+) -> bool:
+    """Ждёт реального появления TUN, а не только живого процесса sing-box."""
+    end = time.time() + max(0.0, timeout)
+    while time.time() < end:
+        if not _process_alive(process):
+            return False
+        if require_xray and not _process_alive(xray_process):
+            return False
+        if _interface_probably_exists(name):
+            return True
+        time.sleep(0.25)
+
+    # Последняя проверка закрывает гонку, когда интерфейс появился на границе
+    # таймаута между последней итерацией и выходом из цикла.
+    return (
+        _process_alive(process)
+        and (not require_xray or _process_alive(xray_process))
+        and _interface_probably_exists(name)
+    )
 
 
 class TunRunner:
@@ -224,20 +252,27 @@ class TunRunner:
                     creationflags=_creation_flags(),
                 )
 
-                end = time.time() + 8
-                while time.time() < end:
-                    if self.proc.poll() is not None:
-                        raise RuntimeError("TUN завершился при запуске:\n" + self.failure_reason())
-                    if self.node.protocol == "vless" and not _process_alive(self.xray_proc):
-                        raise RuntimeError("Xray завершился при запуске:\n" + self.failure_reason())
-                    if _interface_probably_exists("prostokvn_network_tun"):
-                        return
-                    time.sleep(0.25)
+                ready = _wait_tun_interface(
+                    TUN_INTERFACE_NAME,
+                    self.proc,
+                    self.xray_proc,
+                    require_xray=(self.node.protocol == "vless"),
+                    timeout=8.0,
+                )
+                if ready:
+                    return
 
                 if self.proc.poll() is not None:
-                    raise RuntimeError("TUN не запустился:\n" + self.failure_reason())
+                    raise RuntimeError("TUN завершился при запуске:\n" + self.failure_reason())
                 if self.node.protocol == "vless" and not _process_alive(self.xray_proc):
-                    raise RuntimeError("Xray не запустился:\n" + self.failure_reason())
+                    raise RuntimeError("Xray завершился при запуске:\n" + self.failure_reason())
+
+                # Раньше живой sing-box после истечения таймаута считался успешным
+                # запуском даже без созданного TUN-интерфейса.
+                raise RuntimeError(
+                    f"TUN-интерфейс {TUN_INTERFACE_NAME} не появился за 8 секунд.\n"
+                    + self.failure_reason()
+                )
             except Exception:
                 self._stop_locked()
                 raise
