@@ -15,11 +15,20 @@ ProstoKVN Network — Windows-клиент для раздельной марш�
 - проверка новых версий через GitHub Releases;
 - проверка SHA-256 перед установкой обновления.
 
+## Структура проекта
+
+- `src/` — исходный код и ресурсы приложения;
+- `scripts/` — локальный запуск и сборка;
+- `.github/workflows/build.yml` — воспроизводимая Windows-сборка и SignPath;
+- `CODE_SIGNING_POLICY.md` — правила публичной подписи;
+- `PRIVACY.md` — политика конфиденциальности;
+- `THIRD_PARTY.md` — сторонние компоненты.
+
+Временных `release_payload`, base64-частей и дублирующих каталогов сборки в рабочей ветке больше нет.
+
 ## Системные изменения
 
-Во время работы VPN приложение создаёт TUN-интерфейс и временно изменяет маршрутизацию Windows. Ядра и служебные файлы хранятся в:
-
-`%LOCALAPPDATA%\ProstoKVN Network\`
+Во время работы VPN приложение создаёт TUN-интерфейс и временно изменяет маршрутизацию Windows. Ядра и служебные файлы хранятся в `%LOCALAPPDATA%\ProstoKVN Network\`.
 
 ## Текущая версия
 
@@ -27,33 +36,39 @@ ProstoKVN Network — Windows-клиент для раздельной марш�
 
 ## Лицензия
 
-ProstoKVN Network распространяется по лицензии **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). См. [`LICENSE`](LICENSE).
+Собственный код ProstoKVN Network распространяется по лицензии **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). Полный текст находится в [`LICENSE`](LICENSE).
 
 Copyright (C) 2026 GRESHNIK2019.
 
 ## Конфиденциальность
 
-В приложении нет телеметрии и рекламной аналитики. Подробности: [`PRIVACY.md`](PRIVACY.md).
+В приложении нет телеметрии и рекламной аналитики. Подробнее: [`PRIVACY.md`](PRIVACY.md).
 
 ## Code signing policy
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
-Политика подписи и роли проекта: [`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md).
+Политика подписи: [`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md).
 
 - Committers and reviewers: [GRESHNIK2019](https://github.com/GRESHNIK2019)
 - Approvers: [GRESHNIK2019](https://github.com/GRESHNIK2019)
 
-## Сборка
+## Запуск из исходников
 
-GitHub Actions собирает `ProstoKVNNetwork.exe` на GitHub-hosted Windows runner. До подключения SignPath результат доступен как CI artifact. После одобрения OSS-подписки публичный Release должен публиковаться только после успешной проверки Authenticode-подписи.
+```bat
+scripts\start.bat
+```
 
-Исходный архив текущего релиза хранится в `release_payload/v0.20.0/` и восстанавливается GitHub Actions перед сборкой.
+## Локальная сборка
+
+```bat
+scripts\build_exe.bat
+```
+
+GitHub Actions собирает `ProstoKVNNetwork.exe` напрямую из `src/`. Пока SignPath не подключён, EXE доступен как CI artifact. Публичный Release публикуется только после успешной Authenticode-подписи.
 
 ## Удаление
 
-Приложение портативное и не использует отдельный Windows Installer. Для полного удаления:
-
-1. остановите VPN и закройте ProstoKVN Network;
-2. удалите `ProstoKVNNetwork.exe`;
-3. при необходимости удалите `%LOCALAPPDATA%\ProstoKVN Network\`.
+1. Остановить VPN и закрыть ProstoKVN Network.
+2. Удалить `ProstoKVNNetwork.exe`.
+3. При необходимости удалить `%LOCALAPPDATA%\ProstoKVN Network\`.
