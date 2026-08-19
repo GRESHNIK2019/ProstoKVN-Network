@@ -4,13 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 import queue
 import sys
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from nodes import Node
-from ui.runtime_safety import _discard_pending_vpn_events, best_working_node
+from paths import RUNTIME_DIR, USER_DATA_DIR
+from ui.runtime_safety import _discard_pending_vpn_events, _safe_stop_vpn, best_working_node
+from windows_job import JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 
 
 class RuntimeSafetyTests(unittest.TestCase):
@@ -54,6 +57,41 @@ class RuntimeSafetyTests(unittest.TestCase):
         self.assertEqual(app.events.get_nowait(), ("row", "node"))
         with self.assertRaises(queue.Empty):
             app.events.get_nowait()
+
+    def test_stop_cancels_running_and_starting_runner(self):
+        class Runner:
+            def __init__(self):
+                self.stop_count = 0
+
+            def stop(self):
+                self.stop_count += 1
+
+        class App:
+            def __init__(self):
+                self._auto_reconnect_attempted = True
+                self._vpn_generation = 4
+                self._vpn_state_lock = threading.RLock()
+                self.events = queue.Queue()
+                self.runner = Runner()
+                self._starting_runner = Runner()
+
+        app = App()
+        running = app.runner
+        starting = app._starting_runner
+        _safe_stop_vpn(app, silent=True)
+
+        self.assertEqual(running.stop_count, 1)
+        self.assertEqual(starting.stop_count, 1)
+        self.assertIsNone(app.runner)
+        self.assertIsNone(app._starting_runner)
+        self.assertEqual(app._vpn_generation, 5)
+
+    def test_runtime_directory_is_persistent_user_data(self):
+        self.assertEqual(RUNTIME_DIR.parent, USER_DATA_DIR)
+        self.assertEqual(RUNTIME_DIR.name, "runtime")
+
+    def test_windows_job_uses_kill_on_close(self):
+        self.assertEqual(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, 0x00002000)
 
     def test_runtime_safety_is_installed_before_dashboard(self):
         source = (ROOT / "src" / "ui" / "theme.py").read_text(encoding="utf-8")
