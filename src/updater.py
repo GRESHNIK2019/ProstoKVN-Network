@@ -52,6 +52,8 @@ def check_latest_release(current_version: str, api_url: str, exe_asset: str, has
 
     if not exe_url:
         raise RuntimeError(f"В Release v{latest} нет файла {exe_asset}.")
+    if not hash_url:
+        raise RuntimeError(f"В Release v{latest} нет файла {hash_asset}.")
 
     return {
         "version": latest,
@@ -66,21 +68,35 @@ def download_update(info: dict, current_version: str) -> Path:
     update_dir.mkdir(parents=True, exist_ok=True)
     exe_path = update_dir / "ProstoKVNNetwork.new.exe"
 
-    request = urllib.request.Request(str(info["exe_url"]), headers={"User-Agent": f"ProstoKVNNetwork/{current_version}"})
+    request = urllib.request.Request(
+        str(info["exe_url"]),
+        headers={"User-Agent": f"ProstoKVNNetwork/{current_version}"},
+    )
     with urllib.request.urlopen(request, timeout=90) as response, exe_path.open("wb") as output:
         shutil.copyfileobj(response, output)
 
     expected_hash = _download_expected_hash(str(info.get("hash_url") or ""), current_version)
-    if expected_hash and _sha256(exe_path) != expected_hash:
+    actual_hash = _sha256(exe_path)
+    if not expected_hash or actual_hash != expected_hash:
         exe_path.unlink(missing_ok=True)
         raise RuntimeError("SHA-256 обновления не совпадает.")
+
+    try:
+        verify_authenticode(exe_path)
+    except Exception:
+        exe_path.unlink(missing_ok=True)
+        raise
+
     return exe_path
 
 
 def _download_expected_hash(hash_url: str, current_version: str) -> str:
     if not hash_url:
         return ""
-    request = urllib.request.Request(hash_url, headers={"User-Agent": f"ProstoKVNNetwork/{current_version}"})
+    request = urllib.request.Request(
+        hash_url,
+        headers={"User-Agent": f"ProstoKVNNetwork/{current_version}"},
+    )
     with urllib.request.urlopen(request, timeout=20) as response:
         text = response.read().decode("ascii", errors="ignore").strip()
     return (text.split() or [""])[0].strip().lower()
@@ -92,6 +108,42 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().lower()
+
+
+def verify_authenticode(path: Path) -> str:
+    """Проверяет, что Windows доверяет Authenticode-подписи загруженного EXE."""
+    if os.name != "nt":
+        return "not-windows"
+
+    escaped = str(path.resolve()).replace("'", "''")
+    script = (
+        f"$s = Get-AuthenticodeSignature -LiteralPath '{escaped}'; "
+        "$o = [PSCustomObject]@{Status=[string]$s.Status; Subject=''}; "
+        "if ($s.SignerCertificate) {$o.Subject=[string]$s.SignerCertificate.Subject}; "
+        "$o | ConvertTo-Json -Compress"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Не удалось проверить цифровую подпись обновления.")
+
+    try:
+        data = json.loads((result.stdout or "").strip())
+    except Exception as exc:
+        raise RuntimeError("Windows вернул некорректный результат проверки подписи.") from exc
+
+    status = str(data.get("Status") or "")
+    subject = str(data.get("Subject") or "")
+    if status != "Valid":
+        raise RuntimeError(f"Цифровая подпись обновления недействительна: {status or 'Unknown'}.")
+    return subject
 
 
 def launch_self_updater(new_exe: Path, current_exe: Path, pid: int) -> None:
@@ -118,4 +170,8 @@ def launch_self_updater(new_exe: Path, current_exe: Path, pid: int) -> None:
     ]
     updater.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-    subprocess.Popen(["cmd.exe", "/c", str(updater)], cwd=str(new_exe.parent), creationflags=flags)
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(updater)],
+        cwd=str(new_exe.parent),
+        creationflags=flags,
+    )
