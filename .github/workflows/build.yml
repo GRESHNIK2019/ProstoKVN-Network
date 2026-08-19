@@ -22,6 +22,26 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Repair UTF-8 text
+        shell: powershell
+        run: |
+          python tools/fix_encoding.py
+          python -m compileall -q src
+
+      - name: Save repaired sources
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/ProstoKVNNetwork.pyw src/app_config.py src/updater.py version.json RELEASE_NOTES.md
+
+          if (git status --porcelain) {
+            git commit -m "Fix UTF-8 encoding in v0.21.0 [skip ci]"
+            git push origin HEAD:main
+          } else {
+            Write-Host "UTF-8 sources are already clean."
+          }
+
       - name: Read version
         shell: powershell
         run: |
