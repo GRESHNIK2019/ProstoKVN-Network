@@ -1,10 +1,9 @@
 {
-  "version": "0.20.0",
+  "version": "0.21.0",
   "channel": "stable",
-  "release_tag": "v0.20.0",
+  "release_tag": "v0.21.0",
   "asset": "ProstoKVNNetwork.exe",
   "hash_asset": "ProstoKVNNetwork.exe.sha256",
   "source_asset": "ProstoKVNNetwork_Source.zip",
-  "source_sha256": "83847e46b310b4ebadd59a25e861d7a07d9837cd0978c5fe76226a9e896b998b",
-  "notes": "ProstoKVN Network v0.20.0: полный ребрендинг, новый EXE, новый каталог данных, обновлённый GitHub-репозиторий и сохранённое автообновление."
+  "notes": "ProstoKVN Network v0.21.0: Ð¼Ð¾Ð´ÑƒÐ»ÑŒÐ½Ð°Ñ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ð° Ð¸ÑÑ…Ð¾Ð´Ð½Ð¸ÐºÐ¾Ð², Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ updater repository Ð¸ Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ° Ñ‚ÐµÑ…Ð½Ð¸Ñ‡ÐµÑÐºÐ¾Ð³Ð¾ Ð´Ð¾Ð»Ð³Ð°."
 }

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import ctypes
@@ -18,11 +19,6 @@ import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-try:
-    import winreg
-except Exception:
-    winreg = None
-
 from core import (
     Node, TunRunner, SETTINGS_PATH, blocklists_age_seconds, download_subscription,
     find_singbox_binary, find_xray_binary, get_cached_ru_blocklists, is_admin,
@@ -30,13 +26,11 @@ from core import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.20.0"
-UPDATE_REPO = "GRESHNIK2019/SmartVPN"
-UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
-UPDATE_ASSET = "ProstoKVNNetwork.exe"
-UPDATE_HASH_ASSET = "ProstoKVNNetwork.exe.sha256"
-
-
+from app_config import (
+    APP_VERSION, PALETTES, STRATEGIES, STRATEGY_DESCRIPTIONS, THEME_LABELS,
+    UPDATE_API, UPDATE_ASSET, UPDATE_HASH_ASSET, detect_windows_theme,
+)
+from updater import check_latest_release, download_update, launch_self_updater
 def relaunch_as_admin() -> bool:
     if os.name != 'nt' or is_admin():
         return False
@@ -51,48 +45,6 @@ def relaunch_as_admin() -> bool:
 if os.name == 'nt' and not is_admin():
     if relaunch_as_admin():
         raise SystemExit(0)
-
-
-STRATEGIES = {
-    'smart_ru': 'Smart',
-    'game_only': 'Games',
-    'global': 'Global',
-}
-STRATEGY_DESCRIPTIONS = {
-    'smart_ru': 'Блокировки РФ + YouTube/Discord/Telegram + игры через VPN',
-    'game_only': 'Только игры / Ubisoft / Discord через VPN',
-    'global': 'Почти весь трафик через VPN, Steam.exe остаётся DIRECT',
-}
-THEME_LABELS = {'system': 'Система', 'light': 'Светлая', 'dark': 'Тёмная'}
-
-PALETTES = {
-    'dark': {
-        'root': '#18191C', 'card': '#1F2024', 'card2': '#25272C', 'border': '#34363C',
-        'text': '#F2F2F2', 'secondary': '#B5BAC1', 'muted': '#8B8F97', 'accent': '#2A8CFF',
-        'accent_hover': '#4A9EFF', 'accent_text': '#FFFFFF', 'segment': '#2B2D33',
-        'segment_hover': '#373A42', 'good_bg': '#0E4B2D', 'good': '#39D16D',
-        'bad': '#FF5E57', 'selection': '#234A75', 'menu_bg': '#141519', 'menu_active': '#2A8CFF'
-    },
-    'light': {
-        'root': '#F3F5F7', 'card': '#FFFFFF', 'card2': '#F1F3F5', 'border': '#D8DDE3',
-        'text': '#111111', 'secondary': '#4B5563', 'muted': '#6B7280', 'accent': '#1677FF',
-        'accent_hover': '#3A8CFF', 'accent_text': '#FFFFFF', 'segment': '#ECEFF3',
-        'segment_hover': '#E3E8EF', 'good_bg': '#DDF6E5', 'good': '#118A43',
-        'bad': '#D22D20', 'selection': '#D9E8FF', 'menu_bg': '#FFFFFF', 'menu_active': '#1677FF'
-    }
-}
-
-
-def detect_windows_theme() -> str:
-    if os.name != 'nt' or winreg is None:
-        return 'dark'
-    try:
-        path = r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
-            value, _ = winreg.QueryValueEx(key, 'AppsUseLightTheme')
-        return 'light' if int(value) else 'dark'
-    except Exception:
-        return 'dark'
 
 
 class App(tk.Tk):
@@ -136,7 +88,7 @@ class App(tk.Tk):
         self.current_theme = self._resolved_theme()
         self.palette = PALETTES[self.current_theme]
 
-        self.title('ProstoKVN Network v0.20.0')
+        self.title(f'ProstoKVN Network v{APP_VERSION}')
         self.geometry('1260x760')
         self.minsize(1040, 640)
         self.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -910,7 +862,6 @@ class App(tk.Tk):
                     self._refresh_strategy_buttons()
                     self._refresh_tree()
                     self._refresh_header_summary()
-                    self._refresh_header_summary()
                 elif kind == 'stopped':
                     self.applied_strategy_key = None
                     self.applied_node = None
@@ -1211,173 +1162,64 @@ class App(tk.Tk):
             self._refresh_header_summary()
 
     # ---------------- Updates ----------------
-    @staticmethod
-    def _version_tuple(value: str):
-        value = str(value or "").strip().lower().lstrip("v")
-        nums = []
-        for part in value.split("."):
-            m = re.match(r"(\\d+)", part)
-            nums.append(int(m.group(1)) if m else 0)
-        while len(nums) < 3:
-            nums.append(0)
-        return tuple(nums[:4])
-
     def check_for_updates(self, manual: bool = False):
-        self._append_log("[UPDATE] Проверяю GitHub Releases...")
+        self._append_log("[UPDATE] ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ GitHub Releases...")
         if manual:
-            self.status_var.set("Проверяю обновления...")
+            self.status_var.set("ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ...")
 
         def worker():
             try:
-                req = urllib.request.Request(
-                    UPDATE_API,
-                    headers={
-                        "User-Agent": f"ProstoKVNNetwork/{APP_VERSION}",
-                        "Accept": "application/vnd.github+json",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    data = json.loads(resp.read().decode("utf-8", errors="replace"))
-
-                latest = str(data.get("tag_name") or "").strip().lstrip("v")
-                if not latest:
-                    raise RuntimeError("GitHub Release не содержит tag_name.")
-
-                if self._version_tuple(latest) <= self._version_tuple(APP_VERSION):
+                info = check_latest_release(APP_VERSION, UPDATE_API, UPDATE_ASSET, UPDATE_HASH_ASSET)
+                if info is None:
                     self.events.put(("update_none", manual))
                     return
-
-                exe_url = ""
-                hash_url = ""
-                for asset in data.get("assets") or []:
-                    name = str(asset.get("name") or "")
-                    if name == UPDATE_ASSET:
-                        exe_url = str(asset.get("browser_download_url") or "")
-                    elif name == UPDATE_HASH_ASSET:
-                        hash_url = str(asset.get("browser_download_url") or "")
-
-                if not exe_url:
-                    raise RuntimeError(f"В Release v{latest} нет файла {UPDATE_ASSET}.")
-
-                self.events.put(("update_available", {
-                    "version": latest,
-                    "exe_url": exe_url,
-                    "hash_url": hash_url,
-                    "notes": str(data.get("body") or "").strip(),
-                    "manual": manual,
-                }))
+                info["manual"] = manual
+                self.events.put(("update_available", info))
             except Exception as exc:
                 self.events.put(("update_error", (manual, str(exc))))
-
         threading.Thread(target=worker, daemon=True).start()
 
     def _offer_update(self, info: dict):
         latest = str(info.get("version") or "?")
         notes = str(info.get("notes") or "").strip()
-        short_notes = notes[:700]
-        if len(notes) > 700:
-            short_notes += "..."
-
-        text = (
-            f"Доступна новая версия ProstoKVN Network v{latest}.\\n"
-            f"Текущая версия: v{APP_VERSION}.\\n\\n"
-        )
+        short_notes = notes[:700] + ("..." if len(notes) > 700 else "")
+        text = f"Ð”Ð¾ÑÑ‚ÑƒÐ¿Ð½Ð° Ð½Ð¾Ð²Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ ProstoKVN Network v{latest}.\nÐ¢ÐµÐºÑƒÑ‰Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ: v{APP_VERSION}.\n\n"
         if short_notes:
-            text += short_notes + "\\n\\n"
-        text += "Скачать и установить обновление сейчас?"
+            text += short_notes + "\n\n"
+        text += "Ð¡ÐºÐ°Ñ‡Ð°Ñ‚ÑŒ Ð¸ ÑƒÑÑ‚Ð°Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ ÑÐµÐ¹Ñ‡Ð°Ñ?"
 
-        if messagebox.askyesno("Обновление ProstoKVN Network", text):
+        if messagebox.askyesno("ÐžÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ ProstoKVN Network", text):
             self._download_update(info)
         else:
-            self.status_var.set(f"Доступно обновление v{latest}")
-            self._append_log(f"[UPDATE] v{latest} отложено пользователем")
+            self.status_var.set(f"Ð”Ð¾ÑÑ‚ÑƒÐ¿Ð½Ð¾ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ v{latest}")
+            self._append_log(f"[UPDATE] v{latest} Ð¾Ñ‚Ð»Ð¾Ð¶ÐµÐ½Ð¾ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÐµÐ¼")
 
     def _download_update(self, info: dict):
         if not getattr(sys, "frozen", False):
             messagebox.showinfo(
                 "ProstoKVN Network",
-                "Автоустановка работает в собранной EXE-версии.\\n"
-                "При запуске из исходников новая версия только обнаруживается."
+                "ÐÐ²Ñ‚Ð¾ÑƒÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ° Ñ€Ð°Ð±Ð¾Ñ‚Ð°ÐµÑ‚ Ð² ÑÐ¾Ð±Ñ€Ð°Ð½Ð½Ð¾Ð¹ EXE-Ð²ÐµÑ€ÑÐ¸Ð¸.\nÐŸÑ€Ð¸ Ð·Ð°Ð¿ÑƒÑÐºÐµ Ð¸Ð· Ð¸ÑÑ…Ð¾Ð´Ð½Ð¸ÐºÐ¾Ð² Ð½Ð¾Ð²Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¾Ð±Ð½Ð°Ñ€ÑƒÐ¶Ð¸Ð²Ð°ÐµÑ‚ÑÑ.",
             )
             return
 
-        self.status_var.set(f"Скачиваю ProstoKVN Network v{info.get('version')}...")
-        self._append_log(f"[UPDATE] Загрузка v{info.get('version')}")
+        self.status_var.set(f"Ð¡ÐºÐ°Ñ‡Ð¸Ð²Ð°ÑŽ ProstoKVN Network v{info.get('version')}...")
+        self._append_log(f"[UPDATE] Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° v{info.get('version')}")
 
         def worker():
             try:
-                update_dir = Path(tempfile.gettempdir()) / "ProstoKVNNetwork_Update"
-                update_dir.mkdir(parents=True, exist_ok=True)
-                exe_path = update_dir / "ProstoKVNNetwork.new.exe"
-
-                req = urllib.request.Request(
-                    str(info["exe_url"]),
-                    headers={"User-Agent": f"ProstoKVNNetwork/{APP_VERSION}"},
-                )
-                with urllib.request.urlopen(req, timeout=90) as resp, exe_path.open("wb") as fh:
-                    shutil.copyfileobj(resp, fh)
-
-                expected = ""
-                hash_url = str(info.get("hash_url") or "")
-                if hash_url:
-                    req = urllib.request.Request(
-                        hash_url,
-                        headers={"User-Agent": f"ProstoKVNNetwork/{APP_VERSION}"},
-                    )
-                    with urllib.request.urlopen(req, timeout=20) as resp:
-                        hash_text = resp.read().decode("ascii", errors="ignore").strip()
-                    expected = (hash_text.split() or [""])[0].strip().lower()
-
-                if expected:
-                    h = hashlib.sha256()
-                    with exe_path.open("rb") as fh:
-                        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                            h.update(chunk)
-                    if h.hexdigest().lower() != expected:
-                        raise RuntimeError("SHA-256 обновления не совпадает.")
-
+                exe_path = download_update(info, APP_VERSION)
                 self.events.put(("update_downloaded", {
                     "version": str(info.get("version") or ""),
                     "path": exe_path,
                 }))
             except Exception as exc:
                 self.events.put(("update_download_error", str(exc)))
-
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_self_update(self, payload: dict):
         new_exe = Path(payload["path"]).resolve()
-        current_exe = Path(sys.executable).resolve()
-        pid = os.getpid()
-        updater = new_exe.parent / "ProstoKVNNetwork_updater.cmd"
-
-        lines = [
-            "@echo off",
-            "chcp 65001 >nul",
-            f'set "PID={pid}"',
-            f'set "NEW={new_exe}"',
-            f'set "DST={current_exe}"',
-            ":wait",
-            'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
-            "if not errorlevel 1 (",
-            "    timeout /t 1 /nobreak >nul",
-            "    goto wait",
-            ")",
-            'copy /Y "%NEW%" "%DST%" >nul',
-            "if errorlevel 1 exit /b 1",
-            'start "" "%DST%"',
-            'del /Q "%NEW%" >nul 2>&1',
-            'del /Q "%~f0" >nul 2>&1',
-        ]
-        updater.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
-
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(updater)],
-            cwd=str(new_exe.parent),
-            creationflags=flags,
-        )
-        self._append_log(f"[UPDATE] Установка v{payload.get('version')} после закрытия программы")
+        launch_self_updater(new_exe, Path(sys.executable).resolve(), os.getpid())
+        self._append_log(f"[UPDATE] Ð£ÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ° v{payload.get('version')} Ð¿Ð¾ÑÐ»Ðµ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ð¸Ñ Ð¿Ñ€Ð¾Ð³Ñ€Ð°Ð¼Ð¼Ñ‹")
         self.stop_vpn(silent=True)
         self.destroy()
 
