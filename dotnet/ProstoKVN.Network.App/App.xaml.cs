@@ -20,6 +20,7 @@ public partial class App : Application
         var xrayConfig = new XrayConfigService();
         var cores = new CoreLocatorService(settings);
         var installer = new CoreInstallerService(settings);
+        var blocklists = new BlocklistService(settings);
         var subscriptions = new SubscriptionService(settings);
         var nodeTester = new NodeTestService(settings, xrayConfig);
         var vpn = new VpnSessionService(settings, routing, xrayConfig);
@@ -29,6 +30,7 @@ public partial class App : Application
             subscriptions,
             cores,
             installer,
+            blocklists,
             nodeTester,
             vpn);
 
