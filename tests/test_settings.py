@@ -30,6 +30,16 @@ class SettingsTests(unittest.TestCase):
             backup.write_text(json.dumps({"restored": True}), encoding="utf-8")
             self.assertTrue(load_settings(path)["restored"])
 
+    def test_backup_is_created_from_new_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({"subscription_url": "https://legacy.test/private"}), encoding="utf-8")
+            save_settings(path, {"subscriptions": [{"url": "dpapi:encrypted"}]})
+
+            backup_text = Path(str(path) + ".bak").read_text(encoding="utf-8")
+            self.assertNotIn("legacy.test/private", backup_text)
+            self.assertIn("dpapi:encrypted", backup_text)
+
     def test_subscription_migration_from_legacy_settings(self):
         items, active = load_subscriptions({
             "subscription_name": "legacy",
