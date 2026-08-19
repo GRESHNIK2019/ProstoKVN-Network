@@ -1,4 +1,4 @@
-name: Apply ProstoKVN Network v0.21 refactor
+name: Build and Release ProstoKVN Network
 
 on:
   workflow_dispatch:
@@ -10,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  refactor:
-    runs-on: windows-latest
+  build-windows:
+    runs-on: windows-2025
 
     steps:
       - name: Checkout
@@ -22,61 +22,173 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Prepare refactor script
+      - name: Read version
         shell: powershell
         run: |
-          $path = "tools/refactor_v021.py"
-          $text = Get-Content $path -Raw
-          $text = $text.Replace(
-            'from nodes import Node, download_subscription\n\n',
-            'from nodes import Node, download_subscription, _bool, _split_csv\n\n'
-          )
-          Set-Content $path $text -Encoding UTF8
+          $meta = Get-Content version.json -Raw | ConvertFrom-Json
+          "APP_VERSION=$($meta.version)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Refactor source tree
+      - name: Install dependencies
         shell: powershell
         run: |
-          python tools/refactor_v021.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Check Python sources
+        shell: powershell
+        run: |
           python -m compileall -q src
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Validate refactor result
+      - name: Build EXE
         shell: powershell
         run: |
-          $required = @(
-            "src/app_config.py",
-            "src/updater.py",
-            "src/paths.py",
-            "src/nodes.py",
-            "src/cores.py"
+          pyinstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --noconsole `
+            --name ProstoKVNNetwork `
+            --icon "src/assets/ProstoKVNNetwork.ico" `
+            --version-file "src/version_info.txt" `
+            --paths "src" `
+            "src/ProstoKVNNetwork.pyw"
+
+      - name: Create source archive
+        shell: powershell
+        run: |
+          $sourceFiles = @(
+            "src",
+            "scripts",
+            "requirements.txt",
+            "README.md",
+            "LICENSE",
+            "PRIVACY.md",
+            "THIRD_PARTY.md",
+            "CODE_SIGNING_POLICY.md",
+            ".github/workflows/build.yml"
           )
-          foreach ($file in $required) {
-            if (-not (Test-Path $file)) {
-              throw "Refactor did not create $file"
+          Compress-Archive -Path $sourceFiles -DestinationPath ProstoKVNNetwork_Source.zip -Force
+
+      - name: Validate SignPath config
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        shell: powershell
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
+        run: |
+          $required = @{
+            SIGNPATH_API_TOKEN = $env:SIGNPATH_API_TOKEN
+            SIGNPATH_ORG_ID = $env:SIGNPATH_ORG_ID
+            SIGNPATH_PROJECT_SLUG = $env:SIGNPATH_PROJECT_SLUG
+            SIGNPATH_POLICY_SLUG = $env:SIGNPATH_POLICY_SLUG
+          }
+
+          $missing = @()
+          foreach ($item in $required.GetEnumerator()) {
+            if ([string]::IsNullOrWhiteSpace($item.Value)) {
+              $missing += $item.Key
             }
           }
 
-          $meta = Get-Content version.json -Raw | ConvertFrom-Json
-          if ($meta.version -ne "0.21.0") {
-            throw "version.json was not updated to 0.21.0"
+          if ($missing.Count -gt 0) {
+            throw "SignPath is enabled, but these values are missing: $($missing -join ', ')"
           }
 
-      - name: Commit refactor result
+      - name: Upload unsigned EXE for SignPath
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProstoKVN-Network-Unsigned
+          path: dist/ProstoKVNNetwork.exe
+          if-no-files-found: error
+
+      - name: Sign EXE with SignPath
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Use signed EXE
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
         shell: powershell
         run: |
-          Remove-Item .refactor-v021-trigger -Force -ErrorAction SilentlyContinue
-          Remove-Item tools/refactor_v021.py -Force
-          Remove-Item tools/build_v021.yml -Force
+          $signedExe = Get-ChildItem "signed" -Filter "ProstoKVNNetwork.exe" -Recurse | Select-Object -First 1
+          if (-not $signedExe) {
+            throw "SignPath completed, but ProstoKVNNetwork.exe was not returned."
+          }
+          Copy-Item $signedExe.FullName "dist/ProstoKVNNetwork.exe" -Force
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src README.md RELEASE_NOTES.md version.json tools .refactor-v021-trigger
-
-          if (-not (git status --porcelain)) {
-            Write-Host "No refactor changes to commit."
-            exit 0
+      - name: Verify Authenticode signature
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        shell: powershell
+        run: |
+          $signature = Get-AuthenticodeSignature "dist/ProstoKVNNetwork.exe"
+          Write-Host "Signature status: $($signature.Status)"
+          if ($signature.SignerCertificate) {
+            Write-Host "Signer: $($signature.SignerCertificate.Subject)"
+          }
+          if ($signature.Status -ne 'Valid') {
+            throw "The executable does not have a valid Authenticode signature."
           }
 
-          git commit -m "Refactor source modules for v0.21.0 [skip ci]"
-          git push origin HEAD:main
+      - name: Unsigned build notice
+        if: ${{ vars.SIGNPATH_ENABLED != 'true' }}
+        shell: powershell
+        run: |
+          Write-Warning "SignPath OSS signing is not configured yet."
+          Write-Warning "The EXE is available only as a CI artifact. Public Release is skipped."
+
+      - name: Create hashes
+        shell: powershell
+        run: |
+          $exeHash = (Get-FileHash dist/ProstoKVNNetwork.exe -Algorithm SHA256).Hash.ToLower()
+          "$exeHash  ProstoKVNNetwork.exe" | Out-File -Encoding ascii dist/ProstoKVNNetwork.exe.sha256
+
+          $sourceHash = (Get-FileHash ProstoKVNNetwork_Source.zip -Algorithm SHA256).Hash.ToLower()
+          "$sourceHash  ProstoKVNNetwork_Source.zip" | Out-File -Encoding ascii ProstoKVNNetwork_Source.zip.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProstoKVN-Network-Windows
+          path: |
+            dist/ProstoKVNNetwork.exe
+            dist/ProstoKVNNetwork.exe.sha256
+            ProstoKVNNetwork_Source.zip
+            ProstoKVNNetwork_Source.zip.sha256
+
+      - name: Publish signed GitHub Release
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          gh release view $tag *> $null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+
+          if (-not $releaseExists) {
+            gh release create $tag `
+              dist/ProstoKVNNetwork.exe `
+              dist/ProstoKVNNetwork.exe.sha256 `
+              ProstoKVNNetwork_Source.zip `
+              ProstoKVNNetwork_Source.zip.sha256 `
+              --title "ProstoKVN Network $tag" `
+              --notes-file RELEASE_NOTES.md `
+              --target $env:GITHUB_SHA
+          } else {
+            gh release upload $tag `
+              dist/ProstoKVNNetwork.exe `
+              dist/ProstoKVNNetwork.exe.sha256 `
+              ProstoKVNNetwork_Source.zip `
+              ProstoKVNNetwork_Source.zip.sha256 `
+              --clobber
+          }
