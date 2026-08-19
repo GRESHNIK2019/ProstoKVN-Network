@@ -25,6 +25,7 @@ from paths import SETTINGS_PATH
 from routing import normalize_process_names
 from settings_store import load_settings, save_settings
 from subscriptions import dump_subscriptions, load_subscriptions, touch_subscription
+from ui.applications import ApplicationMixin
 from ui.subscriptions import SubscriptionMixin
 from ui.theme import ThemeMixin
 from updater import check_latest_release, download_update, launch_self_updater
@@ -49,7 +50,7 @@ if os.name == 'nt' and not is_admin():
         raise SystemExit(0)
 
 
-class App(ThemeMixin, SubscriptionMixin, tk.Tk):
+class App(ThemeMixin, SubscriptionMixin, ApplicationMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -439,73 +440,6 @@ class App(ThemeMixin, SubscriptionMixin, tk.Tk):
             self.advanced.pack_forget()
 
     # ---------------- Приложения и watchdog ----------------
-    def _refresh_custom_apps_label(self):
-        if not hasattr(self, 'custom_apps_var'):
-            return
-        if self.custom_vpn_processes:
-            preview = ', '.join(self.custom_vpn_processes[:3])
-            if len(self.custom_vpn_processes) > 3:
-                preview += f' +{len(self.custom_vpn_processes) - 3}'
-            self.custom_apps_var.set(f'Приложения VPN: {preview}')
-        else:
-            self.custom_apps_var.set('Приложения VPN: не выбраны')
-
-    def open_app_manager(self):
-        p = self.palette
-        window = tk.Toplevel(self)
-        window.title('Приложения через VPN')
-        window.geometry('560x420')
-        window.minsize(500, 360)
-        window.configure(bg=p['root'])
-        window.transient(self)
-
-        tk.Label(window, text='Эти EXE будут идти через VPN в режимах Smart и «Приложения».', bg=p['root'], fg=p['text'], font=('Segoe UI', 10)).pack(anchor='w', padx=14, pady=(14, 8))
-        frame = tk.Frame(window, bg=p['card'], highlightbackground=p['border'], highlightthickness=1)
-        frame.pack(fill='both', expand=True, padx=14, pady=(0, 10))
-        listbox = tk.Listbox(frame, bg=p['card'], fg=p['text'], selectbackground=p['selection'], relief='flat', bd=0, font=('Segoe UI', 10))
-        listbox.pack(fill='both', expand=True, padx=8, pady=8)
-        self.app_listbox = listbox
-        self._refresh_app_listbox()
-
-        buttons = tk.Frame(window, bg=p['root'])
-        buttons.pack(fill='x', padx=14, pady=(0, 14))
-        tk.Button(buttons, text='Добавить EXE', command=self._add_vpn_app, bg=p['accent'], fg=p['accent_text'], activebackground=p['accent_hover'], activeforeground=p['accent_text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left')
-        tk.Button(buttons, text='Удалить', command=self._remove_vpn_app, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='left', padx=(8, 0))
-        tk.Button(buttons, text='Закрыть', command=window.destroy, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=6).pack(side='right')
-
-    def _refresh_app_listbox(self):
-        listbox = getattr(self, 'app_listbox', None)
-        if not listbox or not listbox.winfo_exists():
-            return
-        listbox.delete(0, 'end')
-        for name in self.custom_vpn_processes:
-            listbox.insert('end', name)
-
-    def _add_vpn_app(self):
-        path = filedialog.askopenfilename(title='Выберите приложение', filetypes=[('Windows EXE', '*.exe')])
-        if not path:
-            return
-        name = Path(path).name
-        self.custom_vpn_processes = normalize_process_names(self.custom_vpn_processes + [name])
-        self._save_settings()
-        self._refresh_custom_apps_label()
-        self._refresh_app_listbox()
-        self._append_log(f'[ROUTE] Добавлено приложение через VPN: {name}')
-
-    def _remove_vpn_app(self):
-        listbox = getattr(self, 'app_listbox', None)
-        if not listbox or not listbox.winfo_exists():
-            return
-        selection = listbox.curselection()
-        if not selection:
-            return
-        name = str(listbox.get(selection[0]))
-        self.custom_vpn_processes = [item for item in self.custom_vpn_processes if item.lower() != name.lower()]
-        self._save_settings()
-        self._refresh_custom_apps_label()
-        self._refresh_app_listbox()
-        self._append_log(f'[ROUTE] Удалено приложение из VPN: {name}')
-
     def _poll_runner_health(self):
         runner = self.runner
         if runner and not runner.running():

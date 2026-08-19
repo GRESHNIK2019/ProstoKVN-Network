@@ -20,6 +20,26 @@ PROTECTED_DIRECT = [
 STEAM_DIRECT = ["steam.exe", "GameOverlayUI.exe"]
 DISCORD_PROCESSES = ["Discord.exe"]
 TELEGRAM_PROCESSES = ["Telegram.exe"]
+
+UBISOFT_SMART_PROCESSES = [
+    "UbisoftConnect.exe",
+    "UbisoftConnectWebCore.exe",
+    "UbisoftGameLauncher.exe",
+    "UbisoftGameLauncher64.exe",
+    "UplayWebCore.exe",
+    "UplayService.exe",
+    "upc.exe",
+    "BEService.exe",
+    "BEService_x64.exe",
+    "TheCrew" + "Motor" + "fest.exe",
+    "TheCrew" + "Motor" + "fest_BE.exe",
+]
+UBISOFT_DOMAIN_SUFFIXES = [
+    ".ubisoft.com",
+    ".ubi.com",
+    ".ubisoftconnect.com",
+    ".uplay.com",
+]
 RU_DIRECT_DOMAIN_SUFFIXES = [".ru", ".su", ".рф", ".xn--p1ai"]
 
 
@@ -45,6 +65,14 @@ def normalize_process_names(values: object) -> list[str]:
         seen.add(key)
         result.append(name)
     return result
+
+
+def is_reserved_direct_process(value: str) -> bool:
+    names = normalize_process_names([value])
+    if not names:
+        return False
+    reserved = {name.lower() for name in PROTECTED_DIRECT + STEAM_DIRECT}
+    return names[0].lower() in reserved
 
 
 def _rule_sets_for_paths(paths: list[Path]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -82,25 +110,31 @@ def build_route_rules(
         {"process_name": STEAM_DIRECT, "action": "route", "outbound": "direct"},
     ]
 
-    custom = normalize_process_names(custom_vpn_processes or [])
-    if custom:
-        rules.append({"process_name": custom, "action": "route", "outbound": "proxy"})
-
-    if route_mode in {"smart_ru", "game_only"} or discord_vpn:
-        rules.append({"process_name": DISCORD_PROCESSES, "action": "route", "outbound": "proxy"})
-
-    if route_mode == "smart_ru":
-        rules.append({"process_name": TELEGRAM_PROCESSES, "action": "route", "outbound": "proxy"})
-
-    if steam_webhelper_vpn:
-        rules.append({"process_name": ["steamwebhelper.exe"], "action": "route", "outbound": "proxy"})
-
-    # Российские доменные зоны остаются напрямую во всех стратегиях.
+    # Российские домены имеют приоритет над правилами приложений.
     rules.append({
         "domain_suffix": RU_DIRECT_DOMAIN_SUFFIXES,
         "action": "route",
         "outbound": "direct",
     })
+
+    custom = normalize_process_names(custom_vpn_processes or [])
+
+    if route_mode == "smart_ru":
+        if custom:
+            rules.append({"process_name": custom, "action": "route", "outbound": "proxy"})
+        if discord_vpn:
+            rules.append({"process_name": DISCORD_PROCESSES, "action": "route", "outbound": "proxy"})
+        rules.append({"process_name": TELEGRAM_PROCESSES, "action": "route", "outbound": "proxy"})
+        rules.append({"process_name": UBISOFT_SMART_PROCESSES, "action": "route", "outbound": "proxy"})
+        rules.append({"domain_suffix": UBISOFT_DOMAIN_SUFFIXES, "action": "route", "outbound": "proxy"})
+
+    elif route_mode == "game_only":
+        # В «Приложениях» через VPN идут только процессы, добавленные пользователем.
+        if custom:
+            rules.append({"process_name": custom, "action": "route", "outbound": "proxy"})
+
+    if steam_webhelper_vpn:
+        rules.append({"process_name": ["steamwebhelper.exe"], "action": "route", "outbound": "proxy"})
 
     rule_definitions: list[dict[str, Any]] = []
     if route_mode == "smart_ru" and blocked_ru_vpn and blocklist_paths:
