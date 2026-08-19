@@ -16,16 +16,19 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 Подписываются только бинарные файлы ProstoKVN Network, собранные GitHub Actions из исходного кода и build-скриптов этого репозитория на GitHub-hosted runner. Локально собранные файлы не отправляются на подпись публичного релиза.
 
+Обычные push в `main` создают только CI artifact. Запрос подписи и публичный Release запускаются только для тега вида `vX.Y.Z`, версия которого совпадает с метаданными проекта.
+
 ## Процесс выпуска
 
-1. GitHub Actions проверяет исходный код и собирает `ProstoKVNNetwork.exe`.
-2. Неподписанный EXE загружается как GitHub workflow artifact.
-3. GitHub artifact передаётся в SignPath.
-4. Подписанный EXE возвращается в workflow.
-5. `Get-AuthenticodeSignature` обязан вернуть `Valid`.
-6. После подписи рассчитывается SHA-256.
-7. Только после этих проверок создаётся или обновляется GitHub Release.
-8. Запрос подписи для публичного выпуска требует одобрения назначенного Approver в соответствии с настройками SignPath.
+1. GitHub Actions проверяет исходный код и версию выпуска.
+2. Workflow собирает `ProstoKVNNetwork.exe` на GitHub-hosted Windows runner.
+3. Неподписанный EXE загружается как GitHub workflow artifact.
+4. GitHub artifact передаётся в SignPath.
+5. Подписанный EXE возвращается в workflow.
+6. `Get-AuthenticodeSignature` обязан вернуть `Valid`.
+7. После подписи рассчитывается SHA-256.
+8. Только после этих проверок создаётся или обновляется GitHub Release.
+9. Запрос подписи для публичного выпуска требует одобрения назначенного Approver в соответствии с настройками SignPath.
 
 ## Метаданные бинарного файла
 
