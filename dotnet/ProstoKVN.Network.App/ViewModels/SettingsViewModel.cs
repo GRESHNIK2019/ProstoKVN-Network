@@ -80,6 +80,22 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    private async Task InstallCoresAsync()
+    {
+        await _main.InstallCoresCommand.ExecuteAsync(null);
+        SingBoxPath = _main.Settings.SingBoxPath;
+        XrayPath = _main.Settings.XrayPath;
+        SaveStatus = _main.CoreText;
+    }
+
+    [RelayCommand]
+    private async Task UpdateBlocklistsAsync()
+    {
+        await _main.UpdateBlocklistsCommand.ExecuteAsync(null);
+        SaveStatus = _main.BlocklistStatus;
+    }
+
     private void ApplyToSettings()
     {
         var settings = _main.Settings;
