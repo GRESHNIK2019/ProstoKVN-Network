@@ -2,39 +2,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import base64
 import copy
 import ctypes
 import ipaddress
 import json
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import socket
 import ssl
 import struct
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.parse
 import urllib.request
-import platform
-import shutil
-import zipfile
-import hashlib
 from typing import Any, Callable
 
-try:
-    import yaml  # type: ignore
-except Exception:
-    yaml = None
-
-from paths import (
-    APP_DIR, RUNTIME_DIR, USER_DATA_DIR, BLOCKLIST_DIR, SETTINGS_PATH,
-    MANAGED_CORE_DIR, BLOCKLIST_META_PATH,
-)
+from app_config import APP_VERSION
+from nodes import Node, _bool, _split_csv
+from paths import BLOCKLIST_DIR, BLOCKLIST_META_PATH, RUNTIME_DIR
 
 ITDOG_DOMAIN_URLS = [
     "https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/inside-raw.lst",
@@ -149,29 +136,29 @@ GAME_TCP_ENDPOINTS = [
 ]
 
 
-from nodes import Node, download_subscription, _bool, _split_csv
-
 def find_free_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0)); port = int(s.getsockname()[1]); s.close(); return port
-
-
-
-from cores import install_official_cores, find_singbox_binary, find_xray_binary
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 def _node_query(node: Node) -> dict[str, str]:
-    q = node.extra.get("query")
-    if isinstance(q, dict): return {str(k): str(v) for k, v in q.items()}
+    query = node.extra.get("query")
+    if isinstance(query, dict):
+        return {str(key): str(value) for key, value in query.items()}
+
     if node.source.lower().startswith("vless://"):
-        p = urllib.parse.urlsplit(node.source)
-        qq = urllib.parse.parse_qs(p.query, keep_blank_values=True)
-        return {k: (v[0] if v else "") for k, v in qq.items()}
+        parsed = urllib.parse.urlsplit(node.source)
+        values = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        return {key: (items[0] if items else "") for key, items in values.items()}
+
     clash = node.extra.get("clash")
     if isinstance(clash, dict):
-        d: dict[str, str] = {}
-        for k, v in clash.items():
-            if isinstance(v, (str, int, float, bool)): d[str(k)] = str(v)
-        return d
+        result: dict[str, str] = {}
+        for key, value in clash.items():
+            if isinstance(value, (str, int, float, bool)):
+                result[str(key)] = str(value)
+        return result
+
     return {}
 
 
@@ -256,7 +243,8 @@ def make_xray_test_config(node: Node, port: int, log_path: Path) -> dict[str, An
 
 
 def make_test_config(node: Node, port: int, log_path: Path) -> dict[str, Any]:
-    out = copy.deepcopy(node.outbound); out["tag"] = "proxy"
+    out = copy.deepcopy(node.outbound)
+    out["tag"] = "proxy"
     return {
         "log": {"level": "error", "timestamp": True, "output": str(log_path)},
         "inbounds": [{"type": "socks", "tag": "test-in", "listen": "127.0.0.1", "listen_port": port}],
@@ -272,9 +260,11 @@ def make_test_config(node: Node, port: int, log_path: Path) -> dict[str, Any]:
 def _wait_port(port: int, proc: subprocess.Popen[Any], timeout: float = 4.0) -> bool:
     end = time.time() + timeout
     while time.time() < end:
-        if proc.poll() is not None: return False
+        if proc.poll() is not None:
+            return False
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.15): return True
+            with socket.create_connection(("127.0.0.1", port), timeout=0.15):
+                return True
         except OSError:
             time.sleep(0.08)
     return False
@@ -284,7 +274,8 @@ def _recv_exact(s: socket.socket, n: int) -> bytes:
     b = bytearray()
     while len(b) < n:
         chunk = s.recv(n - len(b))
-        if not chunk: raise OSError("socket closed")
+        if not chunk:
+            raise OSError("socket closed")
         b.extend(chunk)
     return bytes(b)
 
@@ -403,7 +394,7 @@ def _test_node_singbox(node: Node, singbox: Path, timeout: float = 3.0) -> Node:
             except Exception:
                 pass
         node.udp_ok = test_udp_via_socks(port, timeout=max(timeout, 2.8))
-        # UDP is essential for this game; then reward real endpoint reachability and latency.
+        # UDP имеет высокий вес, затем учитываем доступность TCP-точек и задержку.
         score = 0.0
         if node.udp_ok: score += 700.0
         score += node.tcp_ok * 90.0
@@ -496,7 +487,7 @@ def _download_any(urls: list[str], binary: bool = True, timeout: float = 25.0) -
             req = urllib.request.Request(
                 url,
                 headers={
-                    "User-Agent": "ProstoKVNNetwork/0.20",
+                    "User-Agent": f"ProstoKVNNetwork/{APP_VERSION}",
                     "Accept": "*/*",
                     "Cache-Control": "no-cache",
                 },
@@ -555,8 +546,11 @@ def _build_domain_ruleset(texts: list[str], dest: Path) -> dict[str, int]:
     regexes: set[str] = set()
     keywords: set[str] = set()
     for text in texts:
-        e, s, r, k = _normalize_domain_list(text)
-        exact.update(e); suffix.update(s); regexes.update(r); keywords.update(k)
+        current_exact, current_suffix, current_regexes, current_keywords = _normalize_domain_list(text)
+        exact.update(current_exact)
+        suffix.update(current_suffix)
+        regexes.update(current_regexes)
+        keywords.update(current_keywords)
     # Если домен уже есть как suffix, отдельный exact не нужен: в sing-box >=1.9
     # suffix без ведущей точки совпадает и с самим доменом, и с его поддоменами.
     exact.difference_update(suffix)
@@ -594,10 +588,13 @@ def blocklists_age_seconds() -> float | None:
 
 def update_ru_blocklists(log: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Обновить доменные и IP-списки РФ. При частичном сбое оставляет старый кэш."""
-    def emit(msg: str) -> None:
-        if log:
-            try: log(msg)
-            except Exception: pass
+    def emit(message: str) -> None:
+        if not log:
+            return
+        try:
+            log(message)
+        except Exception:
+            pass
 
     texts: list[str] = []
     used_sources: list[str] = []
@@ -779,9 +776,12 @@ def make_tun_config(
 
 
 def is_admin() -> bool:
-    if os.name != "nt": return True
-    try: return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception: return False
+    if os.name != "nt":
+        return True
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 class TunRunner:
@@ -791,10 +791,15 @@ class TunRunner:
         force_game_vpn: bool = True, blocked_ru_vpn: bool = True, blocklist_paths: list[Path] | None = None,
         route_mode: str = "smart_ru", discord_mode: str = "direct",
     ):
-        self.singbox = singbox; self.xray = xray; self.node = node
-        self.discord_vpn = discord_vpn; self.steam_webhelper_vpn = steam_webhelper_vpn
-        self.force_game_vpn = force_game_vpn; self.blocked_ru_vpn = blocked_ru_vpn
-        self.route_mode = route_mode; self.discord_mode = discord_mode
+        self.singbox = singbox
+        self.xray = xray
+        self.node = node
+        self.discord_vpn = discord_vpn
+        self.steam_webhelper_vpn = steam_webhelper_vpn
+        self.force_game_vpn = force_game_vpn
+        self.blocked_ru_vpn = blocked_ru_vpn
+        self.route_mode = route_mode
+        self.discord_mode = discord_mode
         self.blocklist_paths = list(blocklist_paths or [])
         self.proc: subprocess.Popen[Any] | None = None
         self.xray_proc: subprocess.Popen[Any] | None = None
@@ -818,7 +823,8 @@ class TunRunner:
         return {"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": port, "version": "5"}
 
     def start(self) -> None:
-        if self.proc and self.proc.poll() is None: return
+        if self.proc and self.proc.poll() is None:
+            return
         proxy_override = None
         if self.node.protocol == "vless":
             proxy_override = self._start_xray_bridge()
@@ -879,8 +885,8 @@ def _interface_probably_exists(name: str) -> bool:
 
 
 def protocol_summary(nodes: list[Node]) -> dict[str, int]:
-    d: dict[str, int] = {}
-    for n in nodes:
-        key = n.stack_label()
-        d[key] = d.get(key, 0) + 1
-    return d
+    summary: dict[str, int] = {}
+    for node in nodes:
+        key = node.stack_label()
+        summary[key] = summary.get(key, 0) + 1
+    return summary

@@ -4,33 +4,31 @@ from __future__ import annotations
 
 import ctypes
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import queue
-import re
 import sys
 import threading
-import urllib.request
-import hashlib
-import subprocess
-import shutil
-import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from core import (
-    Node, TunRunner, SETTINGS_PATH, blocklists_age_seconds, download_subscription,
-    find_singbox_binary, find_xray_binary, get_cached_ru_blocklists, is_admin,
-    test_node, update_ru_blocklists, install_official_cores,
-)
-
-APP_DIR = Path(__file__).resolve().parent
 from app_config import (
     APP_VERSION, PALETTES, STRATEGIES, STRATEGY_DESCRIPTIONS, THEME_LABELS,
     UPDATE_API, UPDATE_ASSET, UPDATE_HASH_ASSET, detect_windows_theme,
 )
+from core import (
+    TunRunner, blocklists_age_seconds, get_cached_ru_blocklists, is_admin,
+    test_node, update_ru_blocklists,
+)
+from cores import find_singbox_binary, find_xray_binary, install_official_cores
+from nodes import Node, download_subscription
+from paths import SETTINGS_PATH
 from updater import check_latest_release, download_update, launch_self_updater
+
+APP_DIR = Path(__file__).resolve().parent
+
+
 def relaunch_as_admin() -> bool:
     if os.name != 'nt' or is_admin():
         return False
@@ -104,7 +102,7 @@ class App(tk.Tk):
         self.after(4500, lambda: self.check_for_updates(manual=False))
         self.after(1500, self._poll_system_theme)
 
-    # ---------------- Theme ----------------
+    # ---------------- Тема ----------------
     def _resolved_theme(self) -> str:
         mode = self.theme_mode_var.get()
         if mode == 'system':
@@ -176,7 +174,7 @@ class App(tk.Tk):
                 self._rebuild_ui()
         self.after(1500, self._poll_system_theme)
 
-    # ---------------- Layout ----------------
+    # ---------------- Интерфейс ----------------
     def _menu_button(self, parent, text, active=False, command=None):
         p = self.palette
         bg = p['card'] if active else p['root']
@@ -192,7 +190,7 @@ class App(tk.Tk):
         outer = tk.Frame(self, bg=p['root'])
         outer.pack(fill='both', expand=True)
 
-        # Top menu imitation
+        # Верхнее меню
         top = tk.Frame(outer, bg=p['root'])
         top.pack(fill='x', padx=12, pady=(8, 4))
         self._menu_button(top, 'Серверы', active=True)
@@ -205,7 +203,7 @@ class App(tk.Tk):
         pill = tk.Label(right_top, text='Steam.exe DIRECT', bg=p['good_bg'], fg=p['good'], font=('Segoe UI Semibold', 9), padx=10, pady=5)
         pill.pack(side='right', padx=(10, 0))
 
-        # Toolbar
+        # Панель действий
         toolbar = tk.Frame(outer, bg=p['card'], highlightbackground=p['border'], highlightthickness=1)
         toolbar.pack(fill='x', padx=12, pady=(0, 8))
 
@@ -252,7 +250,7 @@ class App(tk.Tk):
         self._refresh_strategy_buttons()
         self._bind_strategy_shortcuts(strat_wrap)
 
-        # Advanced panel collapsible
+        # Сворачиваемая панель расширенных настроек
         self.advanced = tk.Frame(toolbar, bg=p['card'])
         self.advanced.grid_columnconfigure(1, weight=1)
         self.advanced.grid_columnconfigure(3, weight=1)
@@ -270,7 +268,7 @@ class App(tk.Tk):
 
         tk.Button(action_row, text='Расширенные', command=self._toggle_advanced, bg=p['card2'], fg=p['text'], activebackground=p['segment_hover'], activeforeground=p['text'], relief='flat', bd=0, padx=12, pady=7).pack(side='right', padx=(8, 0))
 
-        # Split area
+        # Основная область
         paned = tk.PanedWindow(outer, bg=p['root'], bd=0, sashrelief='flat', sashwidth=6)
         paned.pack(fill='both', expand=True, padx=12, pady=(0, 8))
 
@@ -279,7 +277,7 @@ class App(tk.Tk):
         paned.add(upper, minsize=260)
         paned.add(lower, minsize=140)
 
-        # Upper: nodes table + status lines
+        # Верхняя часть: список узлов и статус
         head = tk.Frame(upper, bg=p['card'])
         head.pack(fill='x', padx=10, pady=(8, 6))
 
@@ -320,7 +318,7 @@ class App(tk.Tk):
         self.tree.tag_configure('chosen', background=p['good_bg'])
         self.tree.tag_configure('bad', foreground=p['bad'])
 
-        # Lower: log panel
+        # Нижняя часть: журнал
         lhead = tk.Frame(lower, bg=p['card'])
         lhead.pack(fill='x', padx=10, pady=(8, 6))
         tk.Label(lhead, text='Журнал', bg=p['card'], fg=p['text'], font=('Segoe UI Semibold', 10)).pack(side='left')
@@ -329,7 +327,7 @@ class App(tk.Tk):
         self.logbox.pack(fill='both', expand=True, padx=8, pady=(0, 8))
         self.logbox.configure(state='disabled')
 
-        # Bottom status bar
+        # Нижняя строка состояния
         bottom = tk.Frame(outer, bg=p['card'], highlightbackground=p['border'], highlightthickness=1)
         bottom.pack(fill='x', padx=12, pady=(0, 10))
         self.bottom_left = tk.Label(bottom, text='Локальный: mixed:10808', bg=p['card'], fg=p['secondary'], font=('Segoe UI', 9), padx=10, pady=7)
@@ -492,7 +490,7 @@ class App(tk.Tk):
         self.start_test(auto=False)
 
 
-    def _make_summary_card(self, parent, title: str, variable: tk.StringVar, width: int = 220):
+    def _make_summary_card(self, parent, title: str, variable: tk.StringVar):
         p = self.palette
         box = tk.Frame(parent, bg=p['card2'], highlightbackground=p['border'], highlightthickness=1)
         box.pack(side='left', fill='x', expand=True, padx=(0, 8))
@@ -548,7 +546,7 @@ class App(tk.Tk):
             self.start_btn.configure(state='normal')
         self.after(50, self._sync_titlebar_theme)
 
-    # ---------------- Strategy ----------------
+    # ---------------- Стратегия ----------------
     def _strategy_menu_label(self, key: str) -> str:
         running = bool(self.runner and self.runner.running())
         if running and self.applied_strategy_key == key:
@@ -588,8 +586,7 @@ class App(tk.Tk):
         return 'break'
 
     def _bind_strategy_shortcuts(self, strategy_area):
-        for widget in (strategy_area,):
-            widget.bind('<Button-3>', self._show_strategy_menu, add='+')
+        strategy_area.bind('<Button-3>', self._show_strategy_menu, add='+')
         for key, btn in self.strategy_buttons.items():
             btn.bind('<Button-3>', self._show_strategy_menu, add='+')
             btn.bind('<Double-Button-1>', lambda _event, k=key: self._double_click_strategy(k), add='+')
@@ -629,7 +626,7 @@ class App(tk.Tk):
         else:
             self.advanced.pack_forget()
 
-    # ---------------- Settings ----------------
+    # ---------------- Настройки ----------------
     def _load_settings(self):
         try:
             data = json.loads(SETTINGS_PATH.read_text(encoding='utf-8'))
@@ -666,7 +663,7 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    # ---------------- Clipboard ----------------
+    # ---------------- Буфер обмена ----------------
     def _clipboard_win32(self) -> str:
         if os.name != 'nt':
             return ''
@@ -722,7 +719,7 @@ class App(tk.Tk):
         entry.bind('<KeyPress>', hard, add='+')
         entry.bind('<FocusOut>', lambda _e: self._save_settings(), add='+')
 
-    # ---------------- First run / cores ----------------
+    # ---------------- Первый запуск и ядра ----------------
     def _first_run_core_check(self):
         self._auto_find_cores()
         missing = []
@@ -771,7 +768,7 @@ class App(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ---------------- Cores and lists ----------------
+    # ---------------- Ядра и списки ----------------
     def _auto_find_cores(self):
         try:
             self.singbox = find_singbox_binary(self.singbox_var.get().strip())
@@ -827,7 +824,7 @@ class App(tk.Tk):
             self._append_log('[SUB] Автоматическая загрузка сохранённой подписки')
             self.start_test(auto=True)
 
-    # ---------------- Events ----------------
+    # ---------------- События ----------------
     def _drain(self):
         try:
             while True:
@@ -928,23 +925,27 @@ class App(tk.Tk):
             pass
         self.after(100, self._drain)
 
-    # ---------------- Node list ----------------
+    # ---------------- Список узлов ----------------
     def _balanced(self, nodes: list[Node], limit: int = 48) -> list[Node]:
         if len(nodes) <= limit:
             return nodes
+
         groups: dict[str, list[Node]] = {}
-        for n in nodes:
-            groups.setdefault(n.protocol, []).append(n)
-        result, i, keys = [], 0, list(groups)
+        for node in nodes:
+            groups.setdefault(node.protocol, []).append(node)
+
+        result: list[Node] = []
+        index = 0
+        keys = list(groups)
         while len(result) < limit and keys:
-            next_keys = []
+            next_keys: list[str] = []
             for key in keys:
-                if i < len(groups[key]) and len(result) < limit:
-                    result.append(groups[key][i])
+                if index < len(groups[key]) and len(result) < limit:
+                    result.append(groups[key][index])
                     next_keys.append(key)
-                elif i + 1 < len(groups[key]):
+                elif index + 1 < len(groups[key]):
                     next_keys.append(key)
-            i += 1
+            index += 1
             keys = next_keys
         return result
 
@@ -993,7 +994,7 @@ class App(tk.Tk):
             subset = self._balanced(nodes, 48)
             tested = []
             with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = {pool.submit(test_node, n, self.singbox, self.xray, 3.0): n for n in subset}
+                futures = [pool.submit(test_node, node, self.singbox, self.xray, 3.0) for node in subset]
                 for future in as_completed(futures):
                     node = future.result()
                     tested.append(node)
@@ -1014,7 +1015,7 @@ class App(tk.Tk):
             self.tested_nodes[existing] = node
         self._refresh_tree()
 
-    def _filtered_nodes(self):
+    def _filtered_nodes(self) -> list[Node]:
         query = self.filter_var.get().strip().lower()
         nodes = self.tested_nodes or []
         if not query:
@@ -1053,9 +1054,6 @@ class App(tk.Tk):
                 self.tree.see(iid)
         elif current_sel and self.tree.exists(current_sel):
             self.tree.selection_set(current_sel)
-
-    def _clear_node_tags(self):
-        pass  # rebuild model-based rendering handles this
 
     def _mark_chosen_node(self, node: Node | None):
         self.selected_node = node
@@ -1161,7 +1159,7 @@ class App(tk.Tk):
             self._append_log('[SUB] Рабочие узлы не найдены')
             self._refresh_header_summary()
 
-    # ---------------- Updates ----------------
+    # ---------------- Обновления ----------------
     def check_for_updates(self, manual: bool = False):
         self._append_log("[UPDATE] Проверяю GitHub Releases...")
         if manual:
