@@ -10,8 +10,10 @@ from typing import Any
 from app_config import STRATEGIES
 from blocklists import get_cached_ru_blocklists, update_ru_blocklists
 from nodes import Node
+from paths import RUNTIME_DIR
 from subscriptions import touch_subscription
 from vpn_runner import TunRunner
+from windows_job import cleanup_stale_core_processes, install_kill_on_exit_job
 
 
 _VPN_EVENT_KINDS = {"started", "stopped"}
@@ -88,6 +90,15 @@ def _working_selected_node(app) -> Node | None:
     return node
 
 
+def _stop_runner_quietly(runner: TunRunner | None) -> None:
+    if runner is None:
+        return
+    try:
+        runner.stop()
+    except Exception:
+        pass
+
+
 def _safe_finish(self, tested: list[Node]) -> None:
     self.busy = False
     self.test_btn.configure(state="normal")
@@ -159,6 +170,7 @@ def _safe_start_vpn(self) -> None:
         generation = _next_generation(self)
         _discard_pending_vpn_events(self)
         self.runner = None
+        self._starting_runner = None
 
     def worker() -> None:
         runner: TunRunner | None = None
@@ -166,22 +178,34 @@ def _safe_start_vpn(self) -> None:
             with _state_lock(self):
                 if generation != self._vpn_generation:
                     return
-            runner = _runner_for(self, node, route_mode)
-            runner.start()
 
+            runner = _runner_for(self, node, route_mode)
             with _state_lock(self):
                 if generation != self._vpn_generation:
-                    runner.stop()
                     return
-                self.runner = runner
-                self.events.put(("started", (route_mode, node)))
-        except Exception as exc:
-            if runner is not None:
-                try:
-                    runner.stop()
-                except Exception:
-                    pass
+                # Публикуем runner ДО тяжёлого start(). Тогда «Остановить»/«Выход»
+                # может немедленно погасить Xray/TUN даже во время запуска.
+                self._starting_runner = runner
+
+            runner.start()
+
+            obsolete = False
             with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
+                if generation != self._vpn_generation:
+                    obsolete = True
+                else:
+                    self.runner = runner
+                    self.events.put(("started", (route_mode, node)))
+
+            if obsolete:
+                _stop_runner_quietly(runner)
+        except Exception as exc:
+            _stop_runner_quietly(runner)
+            with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
                 if generation != self._vpn_generation:
                     return
                 self.runner = None
@@ -218,35 +242,47 @@ def _safe_apply_strategy(self) -> None:
         generation = _next_generation(self)
         _discard_pending_vpn_events(self)
         old_runner = self.runner
+        old_starting = getattr(self, "_starting_runner", None)
         # Watchdog не должен трактовать штатный промежуток между двумя runner как падение.
         self.runner = None
+        self._starting_runner = None
 
     def worker() -> None:
         runner: TunRunner | None = None
         try:
-            if old_runner is not None:
-                old_runner.stop()
+            _stop_runner_quietly(old_runner)
+            if old_starting is not old_runner:
+                _stop_runner_quietly(old_starting)
 
             with _state_lock(self):
                 if generation != self._vpn_generation:
                     return
 
             runner = _runner_for(self, node, route_mode)
-            runner.start()
-
             with _state_lock(self):
                 if generation != self._vpn_generation:
-                    runner.stop()
                     return
-                self.runner = runner
-                self.events.put(("started", (route_mode, node)))
-        except Exception as exc:
-            if runner is not None:
-                try:
-                    runner.stop()
-                except Exception:
-                    pass
+                self._starting_runner = runner
+
+            runner.start()
+
+            obsolete = False
             with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
+                if generation != self._vpn_generation:
+                    obsolete = True
+                else:
+                    self.runner = runner
+                    self.events.put(("started", (route_mode, node)))
+
+            if obsolete:
+                _stop_runner_quietly(runner)
+        except Exception as exc:
+            _stop_runner_quietly(runner)
+            with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
                 if generation != self._vpn_generation:
                     return
                 self.runner = None
@@ -264,26 +300,45 @@ def _safe_stop_vpn(self, silent: bool = False) -> None:
         _next_generation(self)
         _discard_pending_vpn_events(self)
         runner = self.runner
+        starting_runner = getattr(self, "_starting_runner", None)
         self.runner = None
+        self._starting_runner = None
 
-    if runner is not None:
-        try:
-            runner.stop()
-        except Exception:
-            pass
+    _stop_runner_quietly(runner)
+    if starting_runner is not runner:
+        _stop_runner_quietly(starting_runner)
 
     if not silent:
         self.events.put(("stopped", None))
 
 
+def _cleanup_previous_orphans(app: Any) -> None:
+    count = cleanup_stale_core_processes(RUNTIME_DIR)
+    if count <= 0:
+        return
+    try:
+        app.events.put(("cleanup_info", count))
+    except Exception:
+        pass
+
+
 def install_runtime_safety(app: Any) -> None:
-    """Подключает P1-fixes без изменения публичного UI-контракта App."""
+    """Подключает P1-fixes без изменения сетевых конфигов и протоколов."""
     if getattr(app, "_runtime_safety_installed", False):
         return
 
     app._runtime_safety_installed = True
     app._vpn_generation = 0
     app._vpn_state_lock = threading.RLock()
+    app._starting_runner = None
+
+    # Job Object — последний уровень защиты: если GUI аварийно завершится, Windows
+    # автоматически уничтожит все дочерние xray/sing-box текущего запуска.
+    app._process_job_active = install_kill_on_exit_job()
+
+    # Одноразово убираем процессы, оставшиеся от предыдущих тестовых сборок.
+    threading.Thread(target=_cleanup_previous_orphans, args=(app,), daemon=True).start()
+
     app._finish = types.MethodType(_safe_finish, app)
     app.start_vpn = types.MethodType(_safe_start_vpn, app)
     app.apply_strategy = types.MethodType(_safe_apply_strategy, app)
