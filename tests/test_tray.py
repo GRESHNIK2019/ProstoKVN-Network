@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import queue
 import sys
 import unittest
 
@@ -80,6 +81,12 @@ class TrayControllerTests(unittest.TestCase):
         self.assertIn('--hidden-import "pystray._win32"', workflow)
         self.assertIn('--add-data "src/assets/ProstoKVNNetwork.ico;assets"', workflow)
         self.assertIn("--uac-admin", workflow)
+
+    def test_tray_does_not_depend_on_packaged_ico(self):
+        source = (ROOT / "src" / "ui" / "tray.py").read_text(encoding="utf-8")
+        self.assertIn("def _fallback_icon_image", source)
+        self.assertIn("return TrayController._fallback_icon_image()", source)
+        self.assertNotIn("Не найдена иконка ProstoKVNNetwork.ico", source)
 
 
 if __name__ == "__main__":
