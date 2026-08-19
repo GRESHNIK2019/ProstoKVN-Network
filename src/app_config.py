@@ -9,7 +9,7 @@ try:
 except Exception:
     winreg = None
 
-APP_VERSION = "0.21.0"
+APP_VERSION = "0.22.0"
 UPDATE_REPO = "GRESHNIK2019/ProstoKVN-Network"
 UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 UPDATE_ASSET = "ProstoKVNNetwork.exe"
@@ -17,14 +17,14 @@ UPDATE_HASH_ASSET = "ProstoKVNNetwork.exe.sha256"
 
 STRATEGIES = {
     "smart_ru": "Smart",
-    "game_only": "Games",
+    "game_only": "Приложения",
     "global": "Global",
 }
 
 STRATEGY_DESCRIPTIONS = {
-    "smart_ru": "Блокировки РФ + YouTube/Discord/Telegram + игры через VPN",
-    "game_only": "Только игры / Ubisoft / Discord через VPN",
-    "global": "Почти весь трафик через VPN, Steam.exe остаётся DIRECT",
+    "smart_ru": "Блокируемые сервисы + выбранные приложения через VPN, российские сайты напрямую",
+    "game_only": "Только выбранные приложения и Discord через VPN",
+    "global": "Почти весь трафик через VPN, Steam и российские домены остаются DIRECT",
 }
 
 THEME_LABELS = {
