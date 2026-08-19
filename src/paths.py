@@ -7,9 +7,6 @@ from pathlib import Path
 import shutil
 
 APP_DIR = Path(__file__).resolve().parent
-RUNTIME_DIR = APP_DIR / "runtime"
-RUNTIME_DIR.mkdir(exist_ok=True)
-
 DATA_ROOT = Path(os.environ.get("LOCALAPPDATA") or APP_DIR)
 LEGACY_USER_DATA_DIRS = (
     DATA_ROOT / ("Smart" + "VPN"),
@@ -29,6 +26,14 @@ if not USER_DATA_DIR.exists():
             pass
 
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# В onefile-сборке APP_DIR находится внутри временного `_MEI...`. Раньше туда
+# попадали active_*.json и test_*.json, поэтому оставшийся xray/sing-box держал
+# `_MEI` открытым и PyInstaller показывал `Failed to remove temporary directory`.
+# Runtime теперь всегда живёт в постоянном каталоге профиля пользователя.
+RUNTIME_DIR = USER_DATA_DIR / "runtime"
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+
 BLOCKLIST_DIR = USER_DATA_DIR / "blocklists"
 BLOCKLIST_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_PATH = USER_DATA_DIR / "settings.json"
