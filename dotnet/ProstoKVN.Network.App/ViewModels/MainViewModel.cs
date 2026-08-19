@@ -12,6 +12,7 @@ public partial class MainViewModel : ObservableObject
     private readonly SubscriptionService _subscriptionService;
     private readonly CoreLocatorService _coreLocator;
     private readonly CoreInstallerService _coreInstaller;
+    private readonly BlocklistService _blocklists;
     private readonly NodeTestService _nodeTester;
     private readonly VpnSessionService _vpn;
     private readonly SynchronizationContext? _uiContext;
@@ -24,6 +25,7 @@ public partial class MainViewModel : ObservableObject
         SubscriptionService subscriptionService,
         CoreLocatorService coreLocator,
         CoreInstallerService coreInstaller,
+        BlocklistService blocklists,
         NodeTestService nodeTester,
         VpnSessionService vpn)
     {
@@ -31,6 +33,7 @@ public partial class MainViewModel : ObservableObject
         _subscriptionService = subscriptionService;
         _coreLocator = coreLocator;
         _coreInstaller = coreInstaller;
+        _blocklists = blocklists;
         _nodeTester = nodeTester;
         _vpn = vpn;
         _uiContext = SynchronizationContext.Current;
@@ -49,6 +52,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string statusText = "Инициализация...";
     [ObservableProperty] private string filterText = string.Empty;
     [ObservableProperty] private string coreText = "Ядро: —";
+    [ObservableProperty] private string blocklistStatus = "Списки: —";
 
     public string VersionText => "v0.22.0 · C# Preview";
     public Subscription? ActiveSubscription => Settings.Subscriptions.FirstOrDefault(x => x.Id == Settings.ActiveSubscriptionId);
@@ -91,6 +95,17 @@ public partial class MainViewModel : ObservableObject
         AppendLog(Cores.HasSingBox || Cores.HasXray
             ? $"[CORE] Найдены ядра: sing-box={(Cores.HasSingBox ? "yes" : "no")}, xray={(Cores.HasXray ? "yes" : "no")}"
             : "[CORE] Ядра пока не найдены");
+
+        var age = await _blocklists.GetAgeAsync();
+        var cached = _blocklists.GetCachedPaths();
+        BlocklistStatus = cached.Count == 0
+            ? "Списки: не загружены"
+            : age is null ? $"Списки: {cached.Count} файлов" : $"Списки: {cached.Count} файлов · {age.Value.TotalHours:0} ч.";
+
+        if (cached.Count == 0 || age is null || age > TimeSpan.FromHours(24))
+        {
+            _ = UpdateBlocklistsBackgroundAsync();
+        }
 
         var activeSubscription = ActiveSubscription;
         if (activeSubscription is { Enabled: true } && !string.IsNullOrWhiteSpace(activeSubscription.ProtectedUrl))
@@ -155,7 +170,7 @@ public partial class MainViewModel : ObservableObject
         {
             await EnsureCoresAsync();
             StatusText = $"Запускаю VPN: {SelectedNode.Name}";
-            await _vpn.StartAsync(SelectedNode, Cores, Settings);
+            await _vpn.StartAsync(SelectedNode, Cores, Settings, _blocklists.GetCachedPaths());
             ActiveNode = SelectedNode;
             IsRunning = _vpn.IsRunning;
             _expectedRunning = IsRunning;
@@ -218,6 +233,24 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    private async Task UpdateBlocklistsAsync()
+    {
+        try
+        {
+            BlocklistStatus = "Списки: обновление...";
+            var progress = new Progress<string>(message => AppendLog("[LIST] " + message));
+            var result = await _blocklists.UpdateAsync(progress);
+            BlocklistStatus = $"Списки: {result.Paths.Count} файлов · доменов {result.DomainCount + result.ServiceDomainCount:N0}";
+            AppendLog($"[LIST] Обновлено: {result.Paths.Count} файлов");
+        }
+        catch (Exception ex)
+        {
+            BlocklistStatus = "Списки: ошибка обновления";
+            AppendLog("[LIST] Ошибка: " + ex.Message);
+        }
+    }
+
     public async Task SaveSettingsAsync()
     {
         await _settingsService.SaveAsync(Settings);
@@ -269,6 +302,18 @@ public partial class MainViewModel : ObservableObject
         if (Cores.HasSingBox) Settings.SingBoxPath = Cores.SingBox!;
         if (Cores.HasXray) Settings.XrayPath = Cores.Xray!;
         await _settingsService.SaveAsync(Settings);
+    }
+
+    private async Task UpdateBlocklistsBackgroundAsync()
+    {
+        try
+        {
+            await UpdateBlocklistsAsync();
+        }
+        catch
+        {
+            // Фоновое обновление не должно мешать запуску UI.
+        }
     }
 
     private void RefreshDerivedState()
