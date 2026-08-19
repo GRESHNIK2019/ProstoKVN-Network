@@ -9,6 +9,11 @@ import shutil
 from typing import Any
 
 
+# Эти ключи управляются отдельными страницами настроек. Основной экран старых
+# версий о них не знает, поэтому при обычном сохранении их нельзя терять.
+_PRESERVE_IF_MISSING = ("route_rules",)
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -28,11 +33,17 @@ def load_settings(path: Path) -> dict[str, Any]:
 
 
 def save_settings(path: Path, data: dict[str, Any]) -> None:
+    current = _read_json(path) or {}
+    payload = dict(data)
+    for key in _PRESERVE_IF_MISSING:
+        if key not in payload and key in current:
+            payload[key] = current[key]
+
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     backup = path.with_name(path.name + ".bak")
 
-    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     with temp.open("w", encoding="utf-8", newline="\n") as file:
         file.write(text)
         file.flush()
