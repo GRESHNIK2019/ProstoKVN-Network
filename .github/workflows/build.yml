@@ -1,0 +1,107 @@
+name: Build and Release ProstoKVN Network
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Read version
+        shell: powershell
+        run: |
+          $meta = Get-Content version.json -Raw | ConvertFrom-Json
+          "APP_VERSION=$($meta.version)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Rebuild source archive
+        shell: powershell
+        run: |
+          $partsDir = "release_payload/v${env:APP_VERSION}"
+          $parts = Get-ChildItem $partsDir -Filter "part-*.txt" | Sort-Object Name
+          if (-not $parts -or $parts.Count -eq 0) { throw "Source archive parts not found: $partsDir" }
+
+          $base64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ""
+          $bytes = [Convert]::FromBase64String($base64)
+          [IO.File]::WriteAllBytes("ProstoKVNNetwork_Source.zip", $bytes)
+
+          $hash = (Get-FileHash "ProstoKVNNetwork_Source.zip" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Source size: $((Get-Item 'ProstoKVNNetwork_Source.zip').Length) bytes"
+          Write-Host "Source SHA256: $hash"
+
+      - name: Extract source
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build_source | Out-Null
+          Expand-Archive ProstoKVNNetwork_Source.zip build_source -Force
+
+      - name: Install build dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML pyinstaller
+
+      - name: Build EXE
+        shell: powershell
+        run: |
+          pyinstaller --noconfirm --clean --onefile --noconsole --name ProstoKVNNetwork --paths build_source/ProstoKVNNetwork build_source/ProstoKVNNetwork/ProstoKVNNetwork.pyw
+
+      - name: Create hashes
+        shell: powershell
+        run: |
+          $hash = (Get-FileHash dist/ProstoKVNNetwork.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  ProstoKVNNetwork.exe" | Out-File -Encoding ascii dist/ProstoKVNNetwork.exe.sha256
+          $srcHash = (Get-FileHash ProstoKVNNetwork_Source.zip -Algorithm SHA256).Hash.ToLower()
+          "$srcHash  ProstoKVNNetwork_Source.zip" | Out-File -Encoding ascii ProstoKVNNetwork_Source.zip.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProstoKVN-Network-Windows
+          path: |
+            dist/ProstoKVNNetwork.exe
+            dist/ProstoKVNNetwork.exe.sha256
+            ProstoKVNNetwork_Source.zip
+            ProstoKVNNetwork_Source.zip.sha256
+
+      - name: Publish GitHub Release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          $env:RELEASE_TAG = $tag
+          cmd.exe /c "gh release view %RELEASE_TAG% >nul 2>nul"
+          $releaseExists = ($LASTEXITCODE -eq 0)
+
+          if (-not $releaseExists) {
+            gh release create $tag `
+              dist/ProstoKVNNetwork.exe `
+              dist/ProstoKVNNetwork.exe.sha256 `
+              ProstoKVNNetwork_Source.zip `
+              ProstoKVNNetwork_Source.zip.sha256 `
+              --title "ProstoKVN Network $tag" `
+              --notes-file RELEASE_NOTES.md `
+              --target $env:GITHUB_SHA
+          } else {
+            gh release upload $tag `
+              dist/ProstoKVNNetwork.exe `
+              dist/ProstoKVNNetwork.exe.sha256 `
+              ProstoKVNNetwork_Source.zip `
+              ProstoKVNNetwork_Source.zip.sha256 `
+              --clobber
+          }

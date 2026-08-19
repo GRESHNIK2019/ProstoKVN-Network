@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Build
+build/
+dist/
+*.spec
+
+# Local ProstoKVN Network data
+settings.json
+runtime/
+cores/
+blocklists/
+logs/
+*.log
+
+# Secrets / subscriptions
+.env
+.env.*
+subscriptions.json
+subscription*.txt
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
