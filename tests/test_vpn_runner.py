@@ -60,6 +60,13 @@ class VpnRunnerLifecycleTests(unittest.TestCase):
         runner.proc = FakeProcess(True)
         self.assertTrue(runner.running())
 
+    def test_health_failure_makes_runner_not_running(self):
+        runner = self.make_runner("trojan")
+        runner.proc = FakeProcess(True)
+        runner._health_failure = "TUN-интерфейс исчез"
+        self.assertFalse(runner.running())
+        self.assertIn("TUN-интерфейс исчез", runner.failure_reason())
+
     def test_failed_start_cleans_started_xray(self):
         runner = self.make_runner()
         fake_xray = FakeProcess(True)
