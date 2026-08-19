@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -14,6 +15,11 @@ from node_tester import find_free_port, make_xray_test_config, _wait_port
 from nodes import Node
 from paths import RUNTIME_DIR
 from routing import make_tun_config, normalize_process_names
+
+
+# Одновременно запускаем или останавливаем только один VPN-сеанс.
+# Это защищает от гонки при быстрых переключениях стратегии.
+_VPN_LIFECYCLE_LOCK = threading.RLock()
 
 
 def is_admin() -> bool:
@@ -32,6 +38,77 @@ def _creation_flags() -> int:
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
+
+
+def _process_alive(process: subprocess.Popen[Any] | None) -> bool:
+    return bool(process and process.poll() is None)
+
+
+def _stop_process_tree(process: subprocess.Popen[Any] | None) -> None:
+    if not _process_alive(process):
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=6,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    else:
+        try:
+            process.terminate()
+            process.wait(timeout=4)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    try:
+        process.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def _kill_stale_runtime_processes(config_paths: list[Path]) -> None:
+    """Убирает только старые процессы, запущенные с нашими runtime-конфигами."""
+    if os.name != "nt":
+        return
+
+    needles = [str(path.resolve()).lower() for path in config_paths]
+    if not needles:
+        return
+
+    quoted = ",".join("'" + item.replace("'", "''") + "'" for item in needles)
+    script = (
+        f"$needles=@({quoted}); "
+        "Get-CimInstance Win32_Process | ForEach-Object { "
+        "$cmd=[string]$_.CommandLine; "
+        "if (-not $cmd) { return }; "
+        "$lower=$cmd.ToLowerInvariant(); "
+        "$match=$false; "
+        "foreach ($needle in $needles) { if ($lower.Contains($needle)) { $match=$true; break } }; "
+        "if ($match) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } "
+        "}"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        pass
 
 
 class TunRunner:
@@ -59,6 +136,7 @@ class TunRunner:
 
         self.proc: subprocess.Popen[Any] | None = None
         self.xray_proc: subprocess.Popen[Any] | None = None
+        self._starting = False
         self.cfg_path = RUNTIME_DIR / "active_tun.json"
         self.log_path = RUNTIME_DIR / "active_tun.log"
         self.xray_cfg_path = RUNTIME_DIR / "active_xray.json"
@@ -95,75 +173,86 @@ class TunRunner:
         }
 
     def start(self) -> None:
-        if self.running():
-            return
-
-        proxy_override = None
-        if self.node.protocol == "vless":
-            proxy_override = self._start_xray_bridge()
-
-        config = make_tun_config(
-            self.node,
-            self.log_path,
-            discord_vpn=self.discord_vpn,
-            steam_webhelper_vpn=self.steam_webhelper_vpn,
-            blocked_ru_vpn=self.blocked_ru_vpn,
-            blocklist_paths=self.blocklist_paths,
-            proxy_override=proxy_override,
-            route_mode=self.route_mode,
-            custom_vpn_processes=self.custom_vpn_processes,
-        )
-        self.cfg_path.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        check = subprocess.run(
-            [str(self.singbox), "check", "-c", str(self.cfg_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-        )
-        if check.returncode != 0:
-            self.stop()
-            details = (check.stderr or check.stdout or "").strip()[-1600:]
-            raise RuntimeError("sing-box отклонил рабочий конфиг:\n" + details)
-
-        self.proc = subprocess.Popen(
-            [str(self.singbox), "run", "-c", str(self.cfg_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=_creation_flags(),
-        )
-
-        end = time.time() + 8
-        while time.time() < end:
-            if self.proc.poll() is not None:
-                reason = self.failure_reason()
-                self.stop()
-                raise RuntimeError("TUN завершился при запуске:\n" + reason)
-            if _interface_probably_exists("prostokvn_network_tun"):
+        with _VPN_LIFECYCLE_LOCK:
+            if self._main_process_running():
                 return
-            time.sleep(0.25)
 
-        if self.proc.poll() is not None:
-            reason = self.failure_reason()
-            self.stop()
-            raise RuntimeError("TUN не запустился:\n" + reason)
+            self._starting = True
+            try:
+                # После аварийного завершения прошлой копии могли остаться процессы,
+                # которые всё ещё используют наши active_*.json.
+                _kill_stale_runtime_processes([self.cfg_path, self.xray_cfg_path])
+                self._prepare_runtime_files()
+
+                proxy_override = None
+                if self.node.protocol == "vless":
+                    proxy_override = self._start_xray_bridge()
+
+                config = make_tun_config(
+                    self.node,
+                    self.log_path,
+                    discord_vpn=self.discord_vpn,
+                    steam_webhelper_vpn=self.steam_webhelper_vpn,
+                    blocked_ru_vpn=self.blocked_ru_vpn,
+                    blocklist_paths=self.blocklist_paths,
+                    proxy_override=proxy_override,
+                    route_mode=self.route_mode,
+                    custom_vpn_processes=self.custom_vpn_processes,
+                )
+                self.cfg_path.write_text(
+                    json.dumps(config, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                check = subprocess.run(
+                    [str(self.singbox), "check", "-c", str(self.cfg_path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                if check.returncode != 0:
+                    details = (check.stderr or check.stdout or "").strip()[-1600:]
+                    raise RuntimeError("sing-box отклонил рабочий конфиг:\n" + details)
+
+                self.proc = subprocess.Popen(
+                    [str(self.singbox), "run", "-c", str(self.cfg_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_creation_flags(),
+                )
+
+                end = time.time() + 8
+                while time.time() < end:
+                    if self.proc.poll() is not None:
+                        raise RuntimeError("TUN завершился при запуске:\n" + self.failure_reason())
+                    if self.node.protocol == "vless" and not _process_alive(self.xray_proc):
+                        raise RuntimeError("Xray завершился при запуске:\n" + self.failure_reason())
+                    if _interface_probably_exists("prostokvn_network_tun"):
+                        return
+                    time.sleep(0.25)
+
+                if self.proc.poll() is not None:
+                    raise RuntimeError("TUN не запустился:\n" + self.failure_reason())
+                if self.node.protocol == "vless" and not _process_alive(self.xray_proc):
+                    raise RuntimeError("Xray не запустился:\n" + self.failure_reason())
+            except Exception:
+                self._stop_locked()
+                raise
+            finally:
+                self._starting = False
 
     def stop(self) -> None:
-        for process in (self.proc, self.xray_proc):
-            if process and process.poll() is None:
-                try:
-                    process.terminate()
-                    process.wait(timeout=4)
-                except Exception:
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
+        with _VPN_LIFECYCLE_LOCK:
+            self._starting = False
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
+        # Сначала TUN, затем локальный Xray-мост.
+        _stop_process_tree(self.proc)
+        _stop_process_tree(self.xray_proc)
 
         self.proc = None
         self.xray_proc = None
@@ -173,8 +262,26 @@ class TunRunner:
             except Exception:
                 pass
 
+    def _prepare_runtime_files(self) -> None:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        for path in (self.cfg_path, self.xray_cfg_path, self.log_path, self.xray_log_path):
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _main_process_running(self) -> bool:
+        if not _process_alive(self.proc):
+            return False
+        if self.node.protocol == "vless":
+            return _process_alive(self.xray_proc)
+        return True
+
     def running(self) -> bool:
-        return bool(self.proc and self.proc.poll() is None)
+        # Watchdog не должен считать VPN упавшим, пока start() ещё поднимает Xray/TUN.
+        if self._starting:
+            return True
+        return self._main_process_running()
 
     def failure_reason(self) -> str:
         parts: list[str] = []
