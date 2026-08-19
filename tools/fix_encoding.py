@@ -12,28 +12,52 @@ FILES = [
     ROOT / "RELEASE_NOTES.md",
 ]
 
-# UTF-8 text that was accidentally decoded as Windows-1252 usually contains
-# these Latin characters. Normal Russian source text does not.
-MOJIBAKE_MARKERS = ("\u00d0", "\u00d1", "\u00c2", "\u00c3")
+# Признаки строки, где UTF-8 по ошибке прочитали как однобайтовую кодировку.
+MOJIBAKE_MARKERS = ("Ð", "Ñ", "Â", "Ã", "â")
 
 
-def has_mojibake(text: str) -> bool:
-    return any(marker in text for marker in MOJIBAKE_MARKERS)
+def mojibake_score(text: str) -> int:
+    return sum(text.count(marker) for marker in MOJIBAKE_MARKERS)
+
+
+def restore_original_bytes(text: str) -> bytes:
+    """Восстанавливает байты после ошибочного декодирования UTF-8 как CP1252."""
+    result = bytearray()
+
+    for char in text:
+        try:
+            encoded = char.encode("cp1252")
+            if len(encoded) == 1:
+                result.extend(encoded)
+                continue
+        except UnicodeEncodeError:
+            pass
+
+        # Неопределённые в CP1252 байты иногда остаются как C1-control символы.
+        code = ord(char)
+        if code <= 0xFF:
+            result.append(code)
+            continue
+
+        raise UnicodeEncodeError("cp1252", char, 0, 1, "character cannot be restored")
+
+    return bytes(result)
 
 
 def repair_line(line: str) -> str:
     current = line
 
-    # Some lines were damaged twice while a temporary workflow rewrote the file.
-    # Two or three passes safely restore UTF-8; stop as soon as the text is clean.
     for _ in range(3):
-        if not has_mojibake(current):
+        before = mojibake_score(current)
+        if before == 0:
             break
+
         try:
-            repaired = current.encode("cp1252").decode("utf-8")
+            repaired = restore_original_bytes(current).decode("utf-8")
         except (UnicodeEncodeError, UnicodeDecodeError):
             break
-        if repaired == current:
+
+        if mojibake_score(repaired) >= before:
             break
         current = repaired
 
@@ -43,17 +67,19 @@ def repair_line(line: str) -> str:
 def repair_file(path: Path) -> bool:
     original = path.read_text(encoding="utf-8")
     repaired = "".join(repair_line(line) for line in original.splitlines(keepends=True))
+
     if repaired == original:
         return False
 
-    path.write_text(repaired, encoding="utf-8")
+    path.write_text(repaired, encoding="utf-8", newline="\n")
     return True
 
 
 def main() -> None:
-    changed = []
+    changed: list[Path] = []
+
     for path in FILES:
-        if repair_file(path):
+        if path.exists() and repair_file(path):
             changed.append(path.relative_to(ROOT))
 
     for path in changed:
