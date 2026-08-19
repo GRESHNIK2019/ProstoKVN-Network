@@ -24,13 +24,13 @@ STRATEGIES = {
 STRATEGY_DESCRIPTIONS = {
     "smart_ru": "Блокировки РФ + YouTube/Discord/Telegram + игры через VPN",
     "game_only": "Только игры / Ubisoft / Discord через VPN",
-    "global": "ÐŸÐ¾Ñ‡Ñ‚Ð¸ Ð²ÐµÑÑŒ Ñ‚Ñ€Ð°Ñ„Ð¸Ðº Ñ‡ÐµÑ€ÐµÐ· VPN, Steam.exe Ð¾ÑÑ‚Ð°Ñ‘Ñ‚ÑÑ DIRECT",
+    "global": "Почти весь трафик через VPN, Steam.exe остаётся DIRECT",
 }
 
 THEME_LABELS = {
-    "system": "Ð¡Ð¸ÑÑ‚ÐµÐ¼Ð°",
-    "light": "Ð¡Ð²ÐµÑ‚Ð»Ð°Ñ",
-    "dark": "Ð¢Ñ‘Ð¼Ð½Ð°Ñ",
+    "system": "Система",
+    "light": "Светлая",
+    "dark": "Тёмная",
 }
 
 PALETTES = {

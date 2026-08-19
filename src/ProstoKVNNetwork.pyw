@@ -1163,9 +1163,9 @@ class App(tk.Tk):
 
     # ---------------- Updates ----------------
     def check_for_updates(self, manual: bool = False):
-        self._append_log("[UPDATE] ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ GitHub Releases...")
+        self._append_log("[UPDATE] Проверяю GitHub Releases...")
         if manual:
-            self.status_var.set("ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ...")
+            self.status_var.set("Проверяю обновления...")
 
         def worker():
             try:
@@ -1183,22 +1183,22 @@ class App(tk.Tk):
         latest = str(info.get("version") or "?")
         notes = str(info.get("notes") or "").strip()
         short_notes = notes[:700] + ("..." if len(notes) > 700 else "")
-        text = f"Ð”Ð¾ÑÑ‚ÑƒÐ¿Ð½Ð° Ð½Ð¾Ð²Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ ProstoKVN Network v{latest}.\nÐ¢ÐµÐºÑƒÑ‰Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ: v{APP_VERSION}.\n\n"
+        text = f"Доступна новая версия ProstoKVN Network v{latest}.\nТекущая версия: v{APP_VERSION}.\n\n"
         if short_notes:
             text += short_notes + "\n\n"
-        text += "Ð¡ÐºÐ°Ñ‡Ð°Ñ‚ÑŒ Ð¸ ÑƒÑÑ‚Ð°Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ ÑÐµÐ¹Ñ‡Ð°Ñ?"
+        text += "Скачать и установить обновление сейчас?"
 
         if messagebox.askyesno("Обновление ProstoKVN Network", text):
             self._download_update(info)
         else:
-            self.status_var.set(f"Ð”Ð¾ÑÑ‚ÑƒÐ¿Ð½Ð¾ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ v{latest}")
+            self.status_var.set(f"Доступно обновление v{latest}")
             self._append_log(f"[UPDATE] v{latest} отложено пользователем")
 
     def _download_update(self, info: dict):
         if not getattr(sys, "frozen", False):
             messagebox.showinfo(
                 "ProstoKVN Network",
-                "ÐÐ²Ñ‚Ð¾ÑƒÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ° Ñ€Ð°Ð±Ð¾Ñ‚Ð°ÐµÑ‚ Ð² ÑÐ¾Ð±Ñ€Ð°Ð½Ð½Ð¾Ð¹ EXE-Ð²ÐµÑ€ÑÐ¸Ð¸.\nÐŸÑ€Ð¸ Ð·Ð°Ð¿ÑƒÑÐºÐµ Ð¸Ð· Ð¸ÑÑ…Ð¾Ð´Ð½Ð¸ÐºÐ¾Ð² Ð½Ð¾Ð²Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¾Ð±Ð½Ð°Ñ€ÑƒÐ¶Ð¸Ð²Ð°ÐµÑ‚ÑÑ.",
+                "Автоустановка работает в собранной EXE-версии.\nПри запуске из исходников новая версия только обнаруживается.",
             )
             return
 
@@ -1219,7 +1219,7 @@ class App(tk.Tk):
     def _finish_self_update(self, payload: dict):
         new_exe = Path(payload["path"]).resolve()
         launch_self_updater(new_exe, Path(sys.executable).resolve(), os.getpid())
-        self._append_log(f"[UPDATE] Ð£ÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ° v{payload.get('version')} Ð¿Ð¾ÑÐ»Ðµ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ð¸Ñ Ð¿Ñ€Ð¾Ð³Ñ€Ð°Ð¼Ð¼Ñ‹")
+        self._append_log(f"[UPDATE] Установка v{payload.get('version')} после закрытия программы")
         self.stop_vpn(silent=True)
         self.destroy()
 

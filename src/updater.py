@@ -37,7 +37,7 @@ def check_latest_release(current_version: str, api_url: str, exe_asset: str, has
 
     latest = str(data.get("tag_name") or "").strip().lstrip("v")
     if not latest:
-        raise RuntimeError("GitHub Release Ð½Ðµ ÑÐ¾Ð´ÐµÑ€Ð¶Ð¸Ñ‚ tag_name.")
+        raise RuntimeError("GitHub Release не содержит tag_name.")
     if version_tuple(latest) <= version_tuple(current_version):
         return None
 
@@ -73,7 +73,7 @@ def download_update(info: dict, current_version: str) -> Path:
     expected_hash = _download_expected_hash(str(info.get("hash_url") or ""), current_version)
     if expected_hash and _sha256(exe_path) != expected_hash:
         exe_path.unlink(missing_ok=True)
-        raise RuntimeError("SHA-256 Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ Ð½Ðµ ÑÐ¾Ð²Ð¿Ð°Ð´Ð°ÐµÑ‚.")
+        raise RuntimeError("SHA-256 обновления не совпадает.")
     return exe_path
 
 
