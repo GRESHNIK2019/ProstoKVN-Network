@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
 TEXT_EXTENSIONS = {".py", ".pyw", ".md", ".json", ".yml", ".yaml", ".bat", ".txt"}
-MOJIBAKE_MARKERS = ("Ð", "Ñ", "Â", "Ã")
+MOJIBAKE_MARKERS = tuple(chr(code) for code in (0x00D0, 0x00D1, 0x00C2, 0x00C3))
 
 
 def iter_text_files():
