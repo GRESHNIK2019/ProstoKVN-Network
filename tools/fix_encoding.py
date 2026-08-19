@@ -17,14 +17,27 @@ FILES = [
 MOJIBAKE_MARKERS = ("\u00d0", "\u00d1", "\u00c2", "\u00c3")
 
 
-def repair_line(line: str) -> str:
-    if not any(marker in line for marker in MOJIBAKE_MARKERS):
-        return line
+def has_mojibake(text: str) -> bool:
+    return any(marker in text for marker in MOJIBAKE_MARKERS)
 
-    try:
-        return line.encode("cp1252").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return line
+
+def repair_line(line: str) -> str:
+    current = line
+
+    # Some lines were damaged twice while a temporary workflow rewrote the file.
+    # Two or three passes safely restore UTF-8; stop as soon as the text is clean.
+    for _ in range(3):
+        if not has_mojibake(current):
+            break
+        try:
+            repaired = current.encode("cp1252").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+        if repaired == current:
+            break
+        current = repaired
+
+    return current
 
 
 def repair_file(path: Path) -> bool:
