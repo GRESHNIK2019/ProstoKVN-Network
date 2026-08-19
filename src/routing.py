@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 from pathlib import Path
 from typing import Any
 
 from nodes import Node
+from paths import SETTINGS_PATH
+from settings_store import load_settings
 
 PROTECTED_DIRECT = [
     "sing-box.exe",
@@ -21,6 +24,9 @@ STEAM_DIRECT = ["steam.exe", "GameOverlayUI.exe"]
 DISCORD_PROCESSES = ["Discord.exe"]
 TELEGRAM_PROCESSES = ["Telegram.exe"]
 RU_DIRECT_DOMAIN_SUFFIXES = [".ru", ".su", ".рф", ".xn--p1ai"]
+
+ROUTE_RULE_TYPES = {"process", "domain_suffix", "ip_cidr"}
+ROUTE_RULE_ACTIONS = {"proxy", "direct", "block"}
 
 
 def normalize_process_names(values: object) -> list[str]:
@@ -47,6 +53,68 @@ def normalize_process_names(values: object) -> list[str]:
     return result
 
 
+def normalize_route_rules(values: object) -> list[dict[str, str]]:
+    if not isinstance(values, list):
+        return []
+
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        rule_type = str(item.get("type") or "").strip().lower()
+        action = str(item.get("action") or "").strip().lower()
+        raw_value = str(item.get("value") or "").strip()
+        if rule_type not in ROUTE_RULE_TYPES or action not in ROUTE_RULE_ACTIONS or not raw_value:
+            continue
+
+        if rule_type == "process":
+            names = normalize_process_names([raw_value])
+            if not names:
+                continue
+            value = names[0]
+        elif rule_type == "domain_suffix":
+            value = raw_value.lower().strip()
+            if value.startswith("*."):
+                value = value[1:]
+            if "://" in value or "/" in value or " " in value:
+                continue
+            if not value.startswith("."):
+                value = "." + value
+            if value == ".":
+                continue
+        else:
+            try:
+                value = str(ipaddress.ip_network(raw_value, strict=False))
+            except ValueError:
+                continue
+
+        key = (rule_type, value.lower())
+        if key in seen:
+            # Последнее правило для одинакового объекта должно побеждать.
+            result = [r for r in result if (r["type"], r["value"].lower()) != key]
+        seen.add(key)
+        result.append({"type": rule_type, "value": value, "action": action})
+    return result
+
+
+def _custom_route_rules(values: object) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    for item in normalize_route_rules(values):
+        match_key = {
+            "process": "process_name",
+            "domain_suffix": "domain_suffix",
+            "ip_cidr": "ip_cidr",
+        }[item["type"]]
+        rule: dict[str, Any] = {match_key: [item["value"]]}
+        if item["action"] == "block":
+            rule["action"] = "reject"
+        else:
+            rule.update({"action": "route", "outbound": item["action"]})
+        rules.append(rule)
+    return rules
+
+
 def _rule_sets_for_paths(paths: list[Path]) -> tuple[list[dict[str, Any]], list[str]]:
     definitions: list[dict[str, Any]] = []
     tags: list[str] = []
@@ -70,6 +138,7 @@ def _rule_sets_for_paths(paths: list[Path]) -> tuple[list[dict[str, Any]], list[
 def build_route_rules(
     route_mode: str,
     custom_vpn_processes: list[str] | None = None,
+    custom_route_rules: list[dict[str, str]] | None = None,
     discord_vpn: bool = True,
     steam_webhelper_vpn: bool = False,
     blocked_ru_vpn: bool = True,
@@ -78,13 +147,21 @@ def build_route_rules(
     rules: list[dict[str, Any]] = [
         {"network": ["tcp", "udp"], "port": [53], "action": "hijack-dns"},
         {"action": "sniff"},
+        # Ядра самого приложения никогда не отправляем в TUN повторно.
         {"process_name": PROTECTED_DIRECT, "action": "route", "outbound": "direct"},
-        {"process_name": STEAM_DIRECT, "action": "route", "outbound": "direct"},
     ]
+
+    # Пользовательские правила идут до встроенных: пользователь может, например,
+    # явно отправить Discord или Steam через VPN либо заблокировать домен/IP.
+    rules.extend(_custom_route_rules(custom_route_rules or []))
 
     custom = normalize_process_names(custom_vpn_processes or [])
     if custom:
         rules.append({"process_name": custom, "action": "route", "outbound": "proxy"})
+
+    # Историческое безопасное поведение Steam сохраняем, пока пользователь не
+    # создаст более раннее явное правило для steam.exe/GameOverlayUI.exe.
+    rules.append({"process_name": STEAM_DIRECT, "action": "route", "outbound": "direct"})
 
     if route_mode in {"smart_ru", "game_only"} or discord_vpn:
         rules.append({"process_name": DISCORD_PROCESSES, "action": "route", "outbound": "proxy"})
@@ -95,7 +172,8 @@ def build_route_rules(
     if steam_webhelper_vpn:
         rules.append({"process_name": ["steamwebhelper.exe"], "action": "route", "outbound": "proxy"})
 
-    # Российские доменные зоны остаются напрямую во всех стратегиях.
+    # Российские доменные зоны остаются напрямую во всех стратегиях, если их не
+    # переопределило пользовательское правило выше.
     rules.append({
         "domain_suffix": RU_DIRECT_DOMAIN_SUFFIXES,
         "action": "route",
@@ -122,13 +200,18 @@ def make_tun_config(
     proxy_override: dict[str, Any] | None = None,
     route_mode: str = "smart_ru",
     custom_vpn_processes: list[str] | None = None,
+    custom_route_rules: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     outbound = copy.deepcopy(proxy_override if proxy_override is not None else node.outbound)
     outbound["tag"] = "proxy"
 
+    if custom_route_rules is None:
+        custom_route_rules = normalize_route_rules(load_settings(SETTINGS_PATH).get("route_rules") or [])
+
     rules, rule_definitions, final_outbound = build_route_rules(
         route_mode=route_mode,
         custom_vpn_processes=custom_vpn_processes,
+        custom_route_rules=custom_route_rules,
         discord_vpn=discord_vpn,
         steam_webhelper_vpn=steam_webhelper_vpn,
         blocked_ru_vpn=blocked_ru_vpn,
