@@ -14,7 +14,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>ProstoKVN.Network</AssemblyName>
     <RootNamespace>ProstoKVN.Network.App</RootNamespace>
-    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <ApplicationIcon>..\..\src\assets\ProstoKVNNetwork.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,9 +25,5 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ProstoKVN.Network.Core\ProstoKVN.Network.Core.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Assets\AppIcon.ico" />
   </ItemGroup>
 </Project>
