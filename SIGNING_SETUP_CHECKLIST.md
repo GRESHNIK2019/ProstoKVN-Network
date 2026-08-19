@@ -1,95 +1,74 @@
-# Настройка цифровой подписи ProstoKVN Network
+# Настройка бесплатной подписи ProstoKVN Network
 
-Для публичных релизов используем **Microsoft Artifact Signing** и сертификат типа **Public Trust**. Самоподписанные сертификаты для релизов не используем.
+Используем **SignPath Foundation** — бесплатную программу code signing для подходящих open-source проектов.
 
-## 1. Создать Artifact Signing account
+## 1. Подготовить репозиторий
 
-В Azure Portal:
+Перед заявкой проверить:
 
-1. Найти `Artifact Signing Accounts`.
-2. Нажать `Create`.
-3. Выбрать Azure subscription и resource group.
-4. Создать account, например `prostokvn-signing`.
-5. Выбрать поддерживаемый регион.
-6. Для нашего объёма достаточно тарифа `Basic`.
+- репозиторий публичный;
+- есть нормальный README;
+- есть опубликованный релиз;
+- весь собственный код проекта открыт;
+- выбрана OSI-approved лицензия;
+- в релиз не попадает proprietary-код.
 
-После создания сохранить:
+## 2. Выбрать лицензию
 
-- Subscription ID
-- Tenant ID
-- Account name
-- Endpoint региона, например `https://eus.codesigning.azure.net/`
+Для бесплатной программы SignPath Foundation лицензия обязательна.
 
-## 2. Пройти Identity validation
+Для ProstoKVN Network разумные варианты:
 
-Внутри Artifact Signing account:
+- `GPL-3.0` — производные версии при распространении тоже должны оставаться открытыми;
+- `MIT` — максимально свободное повторное использование, включая закрытые коммерческие проекты.
 
-1. Открыть `Identity validations`.
-2. Создать **Public** identity validation.
-3. Дождаться успешной проверки.
+Лицензию не добавляем автоматически: владелец проекта должен выбрать её осознанно.
 
-Важно: Public Trust для организаций доступен в США, Канаде, ЕС и Великобритании. Для индивидуальных разработчиков Microsoft сейчас указывает доступность только в США и Канаде.
+## 3. Подать заявку SignPath Foundation
 
-## 3. Создать Certificate profile
+Подать заявку на бесплатный Open Source Code Signing и указать репозиторий:
 
-После успешной identity validation:
+`GRESHNIK2019/ProstoKVN-Network`
 
-1. Открыть `Certificate profiles`.
-2. Создать профиль типа `Public Trust`.
-3. Например: `prostokvn-public`.
+SignPath проверяет, что проект соответствует условиям OSS-программы.
 
-Сохранить имя профиля.
+## 4. Настроить проект в SignPath
 
-## 4. Создать Microsoft Entra App Registration для GitHub Actions
+После одобрения получить:
 
-Создать отдельное приложение, например `prostokvn-github-signing`.
+- Organization ID;
+- Project slug;
+- Signing policy slug;
+- API token пользователя с правом отправки signing requests.
 
-Для него добавить Federated credential для GitHub:
+GitHub repository должен быть подключён к SignPath как trusted build system.
 
-- Organization: `GRESHNIK2019`
-- Repository: `ProstoKVN-Network`
-- Entity type: `Branch`
-- Branch: `main`
-
-После этого сохранить:
-
-- Application (client) ID
-- Directory (tenant) ID
-
-## 5. Выдать право на подпись
-
-На Artifact Signing account открыть `Access control (IAM)` и назначить созданному service principal роль:
-
-`Artifact Signing Certificate Profile Signer`
-
-## 6. Добавить GitHub Secrets
+## 5. GitHub Secret
 
 Repository → Settings → Secrets and variables → Actions → Secrets:
 
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
+- `SIGNPATH_API_TOKEN`
 
-## 7. Добавить GitHub Variables
+## 6. GitHub Variables
 
 Repository → Settings → Secrets and variables → Actions → Variables:
 
-- `ARTIFACT_SIGNING_ENDPOINT`
-- `ARTIFACT_SIGNING_ACCOUNT`
-- `ARTIFACT_SIGNING_PROFILE`
+- `SIGNPATH_ORG_ID`
+- `SIGNPATH_PROJECT_SLUG`
+- `SIGNPATH_POLICY_SLUG`
 
-Пока всё не настроено, `ARTIFACT_SIGNING_ENABLED` не создавать или оставить не равным `true`.
+После заполнения всех значений:
 
-После заполнения всех значений создать:
+- `SIGNPATH_ENABLED` = `true`
 
-- `ARTIFACT_SIGNING_ENABLED` = `true`
+До этого переменную `SIGNPATH_ENABLED` не создавать или оставить не равной `true`.
 
-## 8. Проверка
+## 7. Запустить сборку
 
-Запустить GitHub Actions вручную или сделать commit в `main`.
+После настройки запустить GitHub Actions.
 
 Ожидаемая цепочка:
 
-`Build EXE → Validate signing config → Azure login → Artifact Signing → Verify Authenticode → SHA-256 → Release`
+`Build EXE → Upload unsigned artifact → SignPath → Verify Authenticode → SHA-256 → Release`
 
-Публичный GitHub Release публикуется только после успешной Authenticode-подписи.
+Если `Get-AuthenticodeSignature` не возвращает `Valid`, GitHub Release не публикуется.
