@@ -92,7 +92,8 @@ public partial class MainViewModel : ObservableObject
             ? $"[CORE] Найдены ядра: sing-box={(Cores.HasSingBox ? "yes" : "no")}, xray={(Cores.HasXray ? "yes" : "no")}"
             : "[CORE] Ядра пока не найдены");
 
-        if (ActiveSubscription is { Enabled: true, ProtectedUrl.Length: > 0 })
+        var activeSubscription = ActiveSubscription;
+        if (activeSubscription is { Enabled: true } && !string.IsNullOrWhiteSpace(activeSubscription.ProtectedUrl))
             await RefreshNodesAsync();
         else
             StatusText = "Добавьте URL подписки";
@@ -116,7 +117,7 @@ public partial class MainViewModel : ObservableObject
             AppendLog($"[SUB] Получено узлов: {Nodes.Count}");
 
             StatusText = "Проверяю узлы...";
-            var semaphore = new SemaphoreSlim(4, 4);
+            using var semaphore = new SemaphoreSlim(4, 4);
             var tasks = Nodes.Select(async node =>
             {
                 await semaphore.WaitAsync();
@@ -250,9 +251,8 @@ public partial class MainViewModel : ObservableObject
     }
 
     partial void OnSelectedNodeChanged(NodeModel? value) => RefreshDerivedState();
-
+    partial void OnActiveNodeChanged(NodeModel? value) => RefreshDerivedState();
     partial void OnFilterTextChanged(string value) => OnPropertyChanged(nameof(FilteredNodes));
-
     partial void OnIsRunningChanged(bool value) => RefreshDerivedState();
 
     private async Task EnsureCoresAsync()
