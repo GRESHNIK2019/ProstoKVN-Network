@@ -6,6 +6,7 @@ on:
       - fix/smart-ubisoft-app-manager
     paths:
       - tools/apply_smart_apps_fix.py
+      - .github/workflows/apply-smart-apps-fix.yml
 
 permissions:
   contents: write
