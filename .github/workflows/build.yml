@@ -25,25 +25,6 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Apply one-time source cleanup
-        if: ${{ github.ref == 'refs/heads/main' }}
-        shell: powershell
-        run: python tools/cleanup_v021.py
-
-      - name: Save source cleanup
-        if: ${{ github.ref == 'refs/heads/main' }}
-        shell: powershell
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/core.py src/ProstoKVNNetwork.pyw
-          if (git status --porcelain) {
-            git commit -m "Clean core and GUI technical debt [skip ci]"
-            git push origin HEAD:main
-          } else {
-            Write-Host "Source cleanup is already applied."
-          }
-
       - name: Read version
         shell: powershell
         run: |
