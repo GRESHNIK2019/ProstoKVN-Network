@@ -4,11 +4,16 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:ProstoKVN.Network.App.ViewModels">
     <Grid x:Name="Root" Background="{ThemeResource AppBackgroundBrush}">
-        <NavigationView x:Name="SettingsNav" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" SelectionChanged="OnNavigationChanged">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <NavigationView x:Name="SettingsNav" Grid.Row="0" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" SelectionChanged="OnNavigationChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="Основные" Icon="Home" Tag="general" />
                 <NavigationViewItem Content="Маршрутизация" Icon="Globe" Tag="routing" />
-                <NavigationViewItem Content="Ядра" Icon="Setting" Tag="cores" />
+                <NavigationViewItem Content="Ядра и списки" Icon="Setting" Tag="cores" />
             </NavigationView.MenuItems>
             <Grid Padding="24">
                 <!-- Основные -->
@@ -81,17 +86,21 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- Ядра -->
+                <!-- Ядра и списки -->
                 <ScrollViewer x:Name="CoresPage" Visibility="Collapsed">
                     <StackPanel Spacing="16" MaxWidth="840" HorizontalAlignment="Left">
-                        <TextBlock Text="Ядра" FontSize="28" FontWeight="SemiBold" />
-                        <TextBlock Text="Пути к официальным sing-box и Xray-core. Если пути пустые, клиент использует управляемые ядра из LocalAppData." Foreground="{ThemeResource MutedBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="Ядра и списки" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock Text="Официальные sing-box/Xray-core и rule-set списки устанавливаются в LocalAppData. Ручные пути можно оставить пустыми." Foreground="{ThemeResource MutedBrush}" TextWrapping="Wrap" />
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="sing-box.exe" FontWeight="SemiBold" />
                                 <TextBox Text="{x:Bind ViewModel.SingBoxPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <TextBlock Text="xray.exe" FontWeight="SemiBold" Margin="0,8,0,0" />
                                 <TextBox Text="{x:Bind ViewModel.XrayPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                                    <Button Content="Установить / обновить ядра" Style="{StaticResource PrimaryButtonStyle}" Command="{x:Bind ViewModel.InstallCoresCommand}" />
+                                    <Button Content="Обновить rule-set списки" Style="{StaticResource SecondaryButtonStyle}" Command="{x:Bind ViewModel.UpdateBlocklistsCommand}" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -99,7 +108,7 @@
             </Grid>
         </NavigationView>
 
-        <Border VerticalAlignment="Bottom" Background="{ThemeResource PanelBrush}" BorderBrush="{ThemeResource BorderBrush}" BorderThickness="0,1,0,0" Padding="18,12">
+        <Border Grid.Row="1" Background="{ThemeResource PanelBrush}" BorderBrush="{ThemeResource BorderBrush}" BorderThickness="0,1,0,0" Padding="18,12">
             <Grid>
                 <TextBlock Text="{x:Bind ViewModel.SaveStatus, Mode=OneWay}" Foreground="{ThemeResource MutedBrush}" VerticalAlignment="Center" />
                 <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
