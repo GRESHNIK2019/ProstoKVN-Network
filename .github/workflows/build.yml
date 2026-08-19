@@ -35,13 +35,19 @@ jobs:
         if: ${{ github.ref == 'refs/heads/v0.22-improvements' || github.head_ref == 'v0.22-improvements' }}
         shell: powershell
         run: |
-          python tools/apply_gui_v022.py
+          python tools/apply_gui_v022_fix.py
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/ProstoKVNNetwork.pyw
           if (git status --porcelain) {
             git commit -m "Apply v0.22 GUI refactor [skip ci]"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             git push origin HEAD:v0.22-improvements
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
       - name: Read version
