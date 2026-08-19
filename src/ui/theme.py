@@ -8,6 +8,7 @@ from tkinter import ttk
 
 from app_config import PALETTES, THEME_LABELS, detect_windows_theme
 from ui.dashboard import build_dashboard
+from ui.runtime_safety import install_runtime_safety
 from ui.settings_window import SettingsMixin
 
 
@@ -173,4 +174,5 @@ class ThemeMixin(SettingsMixin):
         self.after(1500, self._poll_system_theme)
 
     def _wire_settings_ui(self) -> None:
+        install_runtime_safety(self)
         build_dashboard(self)
