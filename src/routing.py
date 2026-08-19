@@ -35,10 +35,10 @@ UBISOFT_SMART_PROCESSES = [
     "TheCrew" + "Motor" + "fest_BE.exe",
 ]
 UBISOFT_DOMAIN_SUFFIXES = [
-    ".ubisoft.com",
-    ".ubi.com",
-    ".ubisoftconnect.com",
-    ".uplay.com",
+    "ubisoft.com",
+    "ubi.com",
+    "ubisoftconnect.com",
+    "uplay.com",
 ]
 RU_DIRECT_DOMAIN_SUFFIXES = [".ru", ".su", ".рф", ".xn--p1ai"]
 
