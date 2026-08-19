@@ -65,8 +65,11 @@ jobs:
             --clean `
             --onefile `
             --noconsole `
+            --uac-admin `
             --name ProstoKVNNetwork `
             --icon "src/assets/ProstoKVNNetwork.ico" `
+            --add-data "src/assets/ProstoKVNNetwork.ico;assets" `
+            --hidden-import "pystray._win32" `
             --version-file "src/version_info.txt" `
             --paths "src" `
             "src/ProstoKVNNetwork.pyw"
