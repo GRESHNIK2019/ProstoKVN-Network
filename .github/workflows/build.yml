@@ -8,17 +8,18 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -33,9 +34,14 @@ jobs:
         run: |
           $partsDir = "release_payload/v${env:APP_VERSION}"
           $parts = Get-ChildItem $partsDir -Filter "part-*.txt" | Sort-Object Name
-          if (-not $parts -or $parts.Count -eq 0) { throw "Source archive parts not found: $partsDir" }
+          if (-not $parts -or $parts.Count -eq 0) {
+            throw "Source archive parts not found: $partsDir"
+          }
 
-          $base64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ""
+          $base64 = ($parts | ForEach-Object {
+            (Get-Content $_.FullName -Raw).Trim()
+          }) -join ""
+
           $bytes = [Convert]::FromBase64String($base64)
           [IO.File]::WriteAllBytes("ProstoKVNNetwork_Source.zip", $bytes)
 
@@ -58,15 +64,66 @@ jobs:
       - name: Build EXE
         shell: powershell
         run: |
-          pyinstaller --noconfirm --clean --onefile --noconsole --name ProstoKVNNetwork --paths build_source/ProstoKVNNetwork build_source/ProstoKVNNetwork/ProstoKVNNetwork.pyw
+          $src = "build_source/ProstoKVNNetwork"
+          pyinstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --noconsole `
+            --name ProstoKVNNetwork `
+            --icon "branding/ProstoKVNNetwork.ico" `
+            --version-file "packaging/version_info.txt" `
+            --paths $src `
+            "$src/ProstoKVNNetwork.pyw"
+
+      - name: Azure login
+        if: ${{ vars.ARTIFACT_SIGNING_ENABLED == 'true' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign EXE with Microsoft Artifact Signing
+        if: ${{ vars.ARTIFACT_SIGNING_ENABLED == 'true' }}
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\ProstoKVNNetwork.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: ProstoKVN Network
+          description-url: https://github.com/GRESHNIK2019/ProstoKVN-Network
+
+      - name: Verify Authenticode signature
+        if: ${{ vars.ARTIFACT_SIGNING_ENABLED == 'true' }}
+        shell: powershell
+        run: |
+          $signature = Get-AuthenticodeSignature "dist/ProstoKVNNetwork.exe"
+          Write-Host "Signature status: $($signature.Status)"
+          Write-Host "Signer: $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne 'Valid') {
+            throw "The executable is not signed with a valid Authenticode signature."
+          }
+
+      - name: Unsigned build notice
+        if: ${{ vars.ARTIFACT_SIGNING_ENABLED != 'true' }}
+        shell: powershell
+        run: |
+          Write-Warning "Artifact Signing is not configured."
+          Write-Warning "The EXE will be uploaded only as a CI artifact. GitHub Release is skipped."
 
       - name: Create hashes
         shell: powershell
         run: |
           $hash = (Get-FileHash dist/ProstoKVNNetwork.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  ProstoKVNNetwork.exe" | Out-File -Encoding ascii dist/ProstoKVNNetwork.exe.sha256
-          $srcHash = (Get-FileHash ProstoKVNNetwork_Source.zip -Algorithm SHA256).Hash.ToLower()
-          "$srcHash  ProstoKVNNetwork_Source.zip" | Out-File -Encoding ascii ProstoKVNNetwork_Source.zip.sha256
+
+          $sourceHash = (Get-FileHash ProstoKVNNetwork_Source.zip -Algorithm SHA256).Hash.ToLower()
+          "$sourceHash  ProstoKVNNetwork_Source.zip" | Out-File -Encoding ascii ProstoKVNNetwork_Source.zip.sha256
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -78,7 +135,8 @@ jobs:
             ProstoKVNNetwork_Source.zip
             ProstoKVNNetwork_Source.zip.sha256
 
-      - name: Publish GitHub Release
+      - name: Publish signed GitHub Release
+        if: ${{ vars.ARTIFACT_SIGNING_ENABLED == 'true' }}
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
