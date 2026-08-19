@@ -28,13 +28,19 @@ jobs:
           $meta = Get-Content version.json -Raw | ConvertFrom-Json
           "APP_VERSION=$($meta.version)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Prepare source archive
+      - name: Rebuild source archive
         shell: powershell
         run: |
-          $source = "release_payload/v${env:APP_VERSION}/ProstoKVNNetwork_Source.zip"
-          if (-not (Test-Path $source)) { throw "Source archive not found: $source" }
-          Copy-Item $source "ProstoKVNNetwork_Source.zip"
+          $partsDir = "release_payload/v${env:APP_VERSION}"
+          $parts = Get-ChildItem $partsDir -Filter "part-*.txt" | Sort-Object Name
+          if (-not $parts -or $parts.Count -eq 0) { throw "Source archive parts not found: $partsDir" }
+
+          $base64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ""
+          $bytes = [Convert]::FromBase64String($base64)
+          [IO.File]::WriteAllBytes("ProstoKVNNetwork_Source.zip", $bytes)
+
           $hash = (Get-FileHash "ProstoKVNNetwork_Source.zip" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Source size: $((Get-Item 'ProstoKVNNetwork_Source.zip').Length) bytes"
           Write-Host "Source SHA256: $hash"
 
       - name: Extract source
