@@ -1,0 +1,112 @@
+<Window
+    x:Class="ProstoKVN.Network.App.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:ProstoKVN.Network.App.ViewModels">
+    <Grid x:Name="Root" Background="{ThemeResource AppBackgroundBrush}">
+        <NavigationView x:Name="SettingsNav" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" SelectionChanged="OnNavigationChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Основные" Icon="Home" Tag="general" />
+                <NavigationViewItem Content="Маршрутизация" Icon="Globe" Tag="routing" />
+                <NavigationViewItem Content="Ядра" Icon="Setting" Tag="cores" />
+            </NavigationView.MenuItems>
+            <Grid Padding="24">
+                <!-- Основные -->
+                <ScrollViewer x:Name="GeneralPage">
+                    <StackPanel Spacing="16" MaxWidth="760" HorizontalAlignment="Left">
+                        <TextBlock Text="Основные" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock Text="Внешний вид и поведение клиента." Foreground="{ThemeResource MutedBrush}" />
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel Spacing="14">
+                                <TextBlock Text="Тема" FontWeight="SemiBold" />
+                                <ComboBox ItemsSource="{x:Bind ViewModel.Themes}" SelectedItem="{x:Bind ViewModel.Theme, Mode=TwoWay}" Width="240" HorizontalAlignment="Left" />
+                                <ToggleSwitch Header="Автопереподключение VPN" IsOn="{x:Bind ViewModel.AutoReconnect, Mode=TwoWay}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Маршрутизация -->
+                <ScrollViewer x:Name="RoutingPage" Visibility="Collapsed">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Маршрутизация" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock Text="Пользовательские правила имеют приоритет над встроенными. Первое совпавшее правило определяет маршрут." Foreground="{ThemeResource MutedBrush}" TextWrapping="Wrap" />
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Режим" FontWeight="SemiBold" />
+                                <ComboBox ItemsSource="{x:Bind ViewModel.RouteModes}" SelectedItem="{x:Bind ViewModel.SelectedRouteMode, Mode=TwoWay}" Width="260" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardStyle}" Padding="0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid Padding="16,14">
+                                    <TextBlock Text="Пользовательские правила" FontWeight="SemiBold" FontSize="16" />
+                                    <TextBlock HorizontalAlignment="Right" Text="VPN / DIRECT / BLOCK" Foreground="{ThemeResource MutedBrush}" />
+                                </Grid>
+                                <ListView Grid.Row="1" MinHeight="280" ItemsSource="{x:Bind ViewModel.Rules}" SelectedItem="{x:Bind ViewModel.SelectedRule, Mode=TwoWay}">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:RouteRuleItemViewModel">
+                                            <Grid Padding="10,8" ColumnSpacing="10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="150" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="130" />
+                                                </Grid.ColumnDefinitions>
+                                                <ComboBox SelectedValue="{x:Bind Type, Mode=TwoWay}" SelectedValuePath="Content">
+                                                    <ComboBoxItem Content="Приложение" />
+                                                    <ComboBoxItem Content="Домен" />
+                                                    <ComboBoxItem Content="IP / подсеть" />
+                                                </ComboBox>
+                                                <TextBox Grid.Column="1" Text="{x:Bind Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Steam.exe / *.example.com / 1.1.1.0/24" />
+                                                <ComboBox Grid.Column="2" SelectedValue="{x:Bind Action, Mode=TwoWay}" SelectedValuePath="Content">
+                                                    <ComboBoxItem Content="VPN" />
+                                                    <ComboBoxItem Content="DIRECT" />
+                                                    <ComboBoxItem Content="BLOCK" />
+                                                </ComboBox>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Padding="14">
+                                    <Button Content="+ Добавить правило" Style="{StaticResource PrimaryButtonStyle}" Command="{x:Bind ViewModel.AddRuleCommand}" />
+                                    <Button Content="Удалить" Style="{StaticResource DangerButtonStyle}" Command="{x:Bind ViewModel.RemoveRuleCommand}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Ядра -->
+                <ScrollViewer x:Name="CoresPage" Visibility="Collapsed">
+                    <StackPanel Spacing="16" MaxWidth="840" HorizontalAlignment="Left">
+                        <TextBlock Text="Ядра" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock Text="Пути к официальным sing-box и Xray-core. Если пути пустые, клиент использует управляемые ядра из LocalAppData." Foreground="{ThemeResource MutedBrush}" TextWrapping="Wrap" />
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="sing-box.exe" FontWeight="SemiBold" />
+                                <TextBox Text="{x:Bind ViewModel.SingBoxPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Text="xray.exe" FontWeight="SemiBold" Margin="0,8,0,0" />
+                                <TextBox Text="{x:Bind ViewModel.XrayPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </NavigationView>
+
+        <Border VerticalAlignment="Bottom" Background="{ThemeResource PanelBrush}" BorderBrush="{ThemeResource BorderBrush}" BorderThickness="0,1,0,0" Padding="18,12">
+            <Grid>
+                <TextBlock Text="{x:Bind ViewModel.SaveStatus, Mode=OneWay}" Foreground="{ThemeResource MutedBrush}" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                    <Button Content="Сохранить" Style="{StaticResource SecondaryButtonStyle}" Command="{x:Bind ViewModel.SaveCommand}" />
+                    <Button Content="Применить к VPN" Style="{StaticResource PrimaryButtonStyle}" Command="{x:Bind ViewModel.ApplyToVpnCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
