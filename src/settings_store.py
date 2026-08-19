@@ -8,14 +8,6 @@ from pathlib import Path
 import shutil
 from typing import Any
 
-from xray_compat import install_xray_config_compat
-
-
-# node_tester загружается раньше routing/settings_store в основном приложении и
-# в vpn_runner. Здесь ставим небольшой compatibility-layer до первого запуска
-# проверки узлов или Xray-моста.
-install_xray_config_compat()
-
 
 # Эти ключи управляются отдельными страницами настроек. Основной экран старых
 # версий о них не знает, поэтому при обычном сохранении их нельзя терять.
