@@ -1,0 +1,66 @@
+name: Build CSharp WinUI
+
+on:
+  push:
+    branches:
+      - rewrite/csharp-winui
+  pull_request:
+    paths:
+      - "dotnet/**"
+      - "ProstoKVN.Network.sln"
+      - ".github/workflows/build-dotnet.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-dotnet:
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Show .NET info
+        shell: pwsh
+        run: dotnet --info
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore ProstoKVN.Network.sln
+
+      - name: Build solution
+        shell: pwsh
+        run: dotnet build ProstoKVN.Network.sln -c Release --no-restore
+
+      - name: Run C# Core smoke tests
+        shell: pwsh
+        run: dotnet run --project dotnet/ProstoKVN.Network.SmokeTests/ProstoKVN.Network.SmokeTests.csproj -c Release --no-build
+
+      - name: Publish WinUI x64
+        shell: pwsh
+        run: >-
+          dotnet publish dotnet/ProstoKVN.Network.App/ProstoKVN.Network.App.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          --no-restore
+          -o artifacts/ProstoKVN-Network-CSharp
+
+      - name: Create archive
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/ProstoKVN-Network-CSharp/* -DestinationPath artifacts/ProstoKVN-Network-CSharp-win-x64.zip -Force
+
+      - name: Upload C# preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProstoKVN-Network-CSharp-win-x64
+          path: artifacts/ProstoKVN-Network-CSharp-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
