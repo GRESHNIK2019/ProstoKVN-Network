@@ -22,26 +22,61 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Prepare refactor script
+        shell: powershell
+        run: |
+          $path = "tools/refactor_v021.py"
+          $text = Get-Content $path -Raw
+          $text = $text.Replace(
+            'from nodes import Node, download_subscription\n\n',
+            'from nodes import Node, download_subscription, _bool, _split_csv\n\n'
+          )
+          Set-Content $path $text -Encoding UTF8
+
       - name: Refactor source tree
         shell: powershell
         run: |
           python tools/refactor_v021.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m compileall -q src
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Restore release workflow
+      - name: Validate refactor result
         shell: powershell
         run: |
-          Copy-Item tools/build_v021.yml .github/workflows/build.yml -Force
-          Remove-Item .github/workflows/refactor-v021.yml -Force -ErrorAction SilentlyContinue
+          $required = @(
+            "src/app_config.py",
+            "src/updater.py",
+            "src/paths.py",
+            "src/nodes.py",
+            "src/cores.py"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) {
+              throw "Refactor did not create $file"
+            }
+          }
+
+          $meta = Get-Content version.json -Raw | ConvertFrom-Json
+          if ($meta.version -ne "0.21.0") {
+            throw "version.json was not updated to 0.21.0"
+          }
+
+      - name: Commit refactor result
+        shell: powershell
+        run: |
           Remove-Item .refactor-v021-trigger -Force -ErrorAction SilentlyContinue
           Remove-Item tools/refactor_v021.py -Force
           Remove-Item tools/build_v021.yml -Force
 
-      - name: Commit v0.21 refactor
-        shell: powershell
-        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Refactor source modules for v0.21.0"
+          git add src README.md RELEASE_NOTES.md version.json tools .refactor-v021-trigger
+
+          if (-not (git status --porcelain)) {
+            Write-Host "No refactor changes to commit."
+            exit 0
+          }
+
+          git commit -m "Refactor source modules for v0.21.0 [skip ci]"
           git push origin HEAD:main
