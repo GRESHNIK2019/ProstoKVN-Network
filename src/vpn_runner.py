@@ -22,6 +22,7 @@ from routing import make_tun_config, normalize_process_names
 
 _VPN_LIFECYCLE_LOCK = threading.RLock()
 TUN_INTERFACE_NAME = "prostokvn_network_tun"
+TUN_INTERFACE_IPV4 = "172.29.77.1"
 TUN_START_TIMEOUT = 12.0
 
 
@@ -292,10 +293,33 @@ class TunRunner:
             return ""
 
 
-def _interface_probably_exists(name: str) -> bool:
+def _interface_probably_exists(name: str, ipv4: str = TUN_INTERFACE_IPV4) -> bool:
+    """Проверяет готовность TUN по имени И по назначенному адресу.
+
+    На части Windows/Wintun сборок `Get-NetAdapter -Name` не всегда возвращает
+    интерфейс под тем же alias, который передан sing-box в `interface_name`.
+    При этом адрес из TUN-конфига уже назначен и трафик реально идёт. Поэтому
+    имя адаптера используется как первый сигнал, а IPv4 — как независимый
+    второй сигнал готовности. Это устраняет ложный timeout при рабочем TUN.
+    """
     if os.name != "nt":
         return True
-    safe = str(name).replace("'", "''")
+
+    safe_name = str(name).replace("'", "''")
+    safe_ip = str(ipv4).replace("'", "''")
+    script = (
+        f"$n='{safe_name}'; $ip='{safe_ip}'; $ready=$false; "
+        "$a=Get-NetAdapter -Name $n -ErrorAction SilentlyContinue; "
+        "if ($a) {$ready=$true}; "
+        "if (-not $ready) {"
+        "$p=Get-NetIPAddress -IPAddress $ip -AddressFamily IPv4 -ErrorAction SilentlyContinue; "
+        "if ($p) {$ready=$true}}; "
+        "if (-not $ready) {"
+        "$c=Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object {"
+        "$_.InterfaceAlias -eq $n -or ($_.IPv4Address -and $_.IPv4Address.IPAddress -eq $ip)} | Select-Object -First 1; "
+        "if ($c) {$ready=$true}}; "
+        "if ($ready) {Write-Output 'READY'}"
+    )
     try:
         result = run_external(
             [
@@ -303,13 +327,31 @@ def _interface_probably_exists(name: str) -> bool:
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                f"Get-NetAdapter -Name '{safe}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name",
+                script,
             ],
             capture_output=True,
             text=True,
-            timeout=2.5,
+            timeout=3.0,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return name.lower() in (result.stdout or "").lower()
+        if result.returncode == 0 and "READY" in (result.stdout or ""):
+            return True
+    except Exception:
+        pass
+
+    # Последний резерв без PowerShell cmdlets: netsh обычно видит уже
+    # назначенный адрес даже в момент, когда Get-NetAdapter ещё не обновился.
+    try:
+        result = run_external(
+            ["netsh", "interface", "ipv4", "show", "addresses"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3.0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        output = (result.stdout or "").casefold()
+        return safe_name.casefold() in output or safe_ip.casefold() in output
     except Exception:
         return False
