@@ -7,9 +7,6 @@ from pathlib import Path
 import shutil
 
 APP_DIR = Path(__file__).resolve().parent
-RUNTIME_DIR = APP_DIR / "runtime"
-RUNTIME_DIR.mkdir(exist_ok=True)
-
 DATA_ROOT = Path(os.environ.get("LOCALAPPDATA") or APP_DIR)
 LEGACY_USER_DATA_DIRS = (
     DATA_ROOT / ("Smart" + "VPN"),
@@ -29,6 +26,15 @@ if not USER_DATA_DIR.exists():
             pass
 
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# В PyInstaller --onefile __file__ расположен внутри временного _MEI-каталога.
+# Нельзя хранить там runtime-конфиги и логи внешних xray/sing-box: дочерний
+# процесс может удерживать временную папку открытой и мешать bootloader удалить её.
+RUNTIME_DIR = USER_DATA_DIR / "runtime"
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = USER_DATA_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 BLOCKLIST_DIR = USER_DATA_DIR / "blocklists"
 BLOCKLIST_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_PATH = USER_DATA_DIR / "settings.json"
