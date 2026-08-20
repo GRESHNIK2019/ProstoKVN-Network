@@ -17,6 +17,8 @@ import subprocess
 import threading
 from typing import Any, Iterable
 
+from external_process import popen_external, run_external
+
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
@@ -105,7 +107,7 @@ class ProcessManager:
             k32.GetLastError.restype = wintypes.DWORD
             handle = k32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
             if not handle:
-                return True  # fail-open: WinAPI ошибка не должна заблокировать запуск
+                return True
             already_exists = int(k32.GetLastError()) == ERROR_ALREADY_EXISTS
             self._mutex = int(handle)
             return not already_exists
@@ -169,7 +171,6 @@ class ProcessManager:
             if raw_handle:
                 k32.AssignProcessToJobObject(wintypes.HANDLE(self._job), wintypes.HANDLE(int(raw_handle)))
         except Exception:
-            # taskkill/explicit handles остаются резервным механизмом.
             pass
 
     def spawn(self, args: Iterable[str] | list[str], **kwargs: Any) -> subprocess.Popen[Any]:
@@ -177,7 +178,7 @@ class ProcessManager:
             raise RuntimeError("VPN-процесс нельзя запустить из второй копии ProstoKVN Network.")
         if os.name == "nt" and "creationflags" not in kwargs:
             kwargs["creationflags"] = windows_creation_flags()
-        process = subprocess.Popen(list(args), **kwargs)
+        process = popen_external(list(args), **kwargs)
         self._assign_to_job(process)
         with self._lock:
             self._children[int(process.pid)] = process
@@ -197,7 +198,7 @@ class ProcessManager:
             return
         if os.name == "nt":
             try:
-                subprocess.run(
+                run_external(
                     ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -278,7 +279,7 @@ class ProcessManager:
             "}; Write-Output $count"
         )
         try:
-            result = subprocess.run(
+            result = run_external(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 text=True,
