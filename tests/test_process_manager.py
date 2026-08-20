@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,25 +11,30 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from process_manager import ProcessManager
+from process_manager import PROCESS_MANAGER, ProcessManager
 
 
 class ProcessManagerTests(unittest.TestCase):
     def test_spawn_and_stop_reaps_child(self):
-        manager = ProcessManager()
-        try:
-            process = manager.spawn(
-                [sys.executable, "-c", "import time; time.sleep(30)"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self.assertIsNone(process.poll())
-            manager.stop(process)
-            self.assertIsNotNone(process.poll())
-        finally:
-            manager.close()
+        self.assertTrue(PROCESS_MANAGER.primary_instance)
+        process = PROCESS_MANAGER.spawn(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.assertIsNone(process.poll())
+        PROCESS_MANAGER.stop(process)
+        self.assertIsNotNone(process.poll())
 
-    def test_cleanup_non_windows_is_safe(self):
+    @unittest.skipUnless(os.name == "nt", "Windows named mutex")
+    def test_second_manager_is_not_primary(self):
+        second = ProcessManager()
+        try:
+            self.assertFalse(second.primary_instance)
+        finally:
+            second.close()
+
+    def test_cleanup_is_safe(self):
         with tempfile.TemporaryDirectory() as directory:
             count = ProcessManager.cleanup_owned_processes(Path(directory))
         self.assertGreaterEqual(count, 0)
