@@ -2,8 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+"""Проверка узлов без утечек дочерних процессов.
+
+Каждый тестовый xray/sing-box запускается через PROCESS_MANAGER, получает
+уникальный runtime-конфиг и всегда завершается в finally. Формирование VLESS
+вынесено в protocol_engine и больше не зависит от monkey-patch.
+"""
+
 import copy
-import ipaddress
 import json
 from pathlib import Path
 import re
@@ -14,11 +20,19 @@ import struct
 import subprocess
 import threading
 import time
-import urllib.parse
 from typing import Any
 
-from nodes import Node, _bool, _split_csv
+from nodes import Node
 from paths import RUNTIME_DIR
+from process_manager import PROCESS_MANAGER, process_alive
+from protocol_engine import (
+    choose_engine,
+    fatal_issues,
+    make_xray_test_config,
+    make_xray_vless_outbound,
+    singbox_outbound,
+    validate_node,
+)
 
 HTTPS_HOST = "www.gstatic.com"
 HTTPS_PATH = "/generate_204"
@@ -35,321 +49,8 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _csv_value(value: Any) -> str:
-    if isinstance(value, (list, tuple)):
-        return ",".join(str(item) for item in value if str(item))
-    return str(value or "")
-
-
-def _header_value(headers: Any, name: str) -> str:
-    if not isinstance(headers, dict):
-        return ""
-    wanted = name.lower()
-    for key, value in headers.items():
-        if str(key).lower() == wanted:
-            return str(value or "")
-    return ""
-
-
-def _node_query(node: Node) -> dict[str, str]:
-    """Возвращает Xray-параметры VLESS независимо от формата подписки."""
-    query = node.extra.get("query")
-    if isinstance(query, dict) and query:
-        return {str(key): str(value) for key, value in query.items()}
-
-    if node.source.lower().startswith("vless://"):
-        parsed = urllib.parse.urlsplit(node.source)
-        values = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        return {key: (items[0] if items else "") for key, items in values.items()}
-
-    result: dict[str, str] = {}
-
-    # VLESS из sing-box JSON и нормализованный Clash outbound уже содержит
-    # transport/tls в структурированном виде. Переводим их обратно в поля,
-    # которые использует Xray builder.
-    outbound = node.outbound if isinstance(node.outbound, dict) else {}
-    if outbound.get("flow"):
-        result["flow"] = str(outbound.get("flow") or "")
-
-    transport = outbound.get("transport")
-    if isinstance(transport, dict):
-        transport_type = str(transport.get("type") or "raw").lower()
-        result["type"] = transport_type
-        if transport.get("path"):
-            result["path"] = str(transport.get("path") or "")
-        host = transport.get("host")
-        if isinstance(host, list):
-            host = host[0] if host else ""
-        if host:
-            result["host"] = str(host)
-        headers = transport.get("headers")
-        header_host = _header_value(headers, "host")
-        if header_host and not result.get("host"):
-            result["host"] = header_host
-        if isinstance(headers, dict) and headers:
-            result["_headers"] = json.dumps(headers, ensure_ascii=False)
-        service = transport.get("service_name") or transport.get("serviceName")
-        if service:
-            result["serviceName"] = str(service)
-        if transport.get("authority"):
-            result["authority"] = str(transport.get("authority") or "")
-        if transport.get("mode"):
-            result["mode"] = str(transport.get("mode") or "")
-        if isinstance(transport.get("extra"), dict):
-            result["extra"] = json.dumps(transport["extra"], ensure_ascii=False)
-
-    tls = outbound.get("tls")
-    if isinstance(tls, dict) and _bool(tls.get("enabled", True)):
-        reality = tls.get("reality") if isinstance(tls.get("reality"), dict) else None
-        result["security"] = "reality" if reality else "tls"
-        if tls.get("server_name"):
-            result["sni"] = str(tls.get("server_name") or "")
-        if tls.get("insecure") is not None:
-            result["allowInsecure"] = "true" if _bool(tls.get("insecure")) else "false"
-        if tls.get("alpn"):
-            result["alpn"] = _csv_value(tls.get("alpn"))
-        utls = tls.get("utls") if isinstance(tls.get("utls"), dict) else None
-        if utls and utls.get("fingerprint"):
-            result["fp"] = str(utls.get("fingerprint") or "")
-        if reality:
-            public_key = reality.get("public_key") or reality.get("publicKey")
-            short_id = reality.get("short_id") or reality.get("shortId")
-            if public_key:
-                result["pbk"] = str(public_key)
-            if short_id:
-                result["sid"] = str(short_id)
-
-    # Clash хранит часть критичных параметров во вложенных *-opts. Они не
-    # попадали в старый scalar-only flatten и из-за этого WS/gRPC/REALITY
-    # ломались именно для YAML-подписок.
-    clash = node.extra.get("clash")
-    if isinstance(clash, dict):
-        network = str(clash.get("network") or result.get("type") or "raw").lower()
-        result["type"] = network
-
-        reality_opts = clash.get("reality-opts")
-        if not isinstance(reality_opts, dict):
-            reality_opts = clash.get("reality_opts")
-        if isinstance(reality_opts, dict):
-            result["security"] = "reality"
-            public_key = reality_opts.get("public-key") or reality_opts.get("public_key")
-            short_id = reality_opts.get("short-id") or reality_opts.get("short_id")
-            if public_key:
-                result["pbk"] = str(public_key)
-            if short_id:
-                result["sid"] = str(short_id)
-        elif _bool(clash.get("tls")):
-            result["security"] = "tls"
-
-        sni = clash.get("servername") or clash.get("sni")
-        if sni:
-            result["sni"] = str(sni)
-        fingerprint = clash.get("client-fingerprint") or clash.get("fingerprint")
-        if fingerprint:
-            result["fp"] = str(fingerprint)
-        if clash.get("skip-cert-verify") is not None:
-            result["allowInsecure"] = "true" if _bool(clash.get("skip-cert-verify")) else "false"
-        if clash.get("alpn"):
-            result["alpn"] = _csv_value(clash.get("alpn"))
-        if clash.get("flow"):
-            result["flow"] = str(clash.get("flow") or "")
-
-        if network in {"ws", "websocket"}:
-            opts = clash.get("ws-opts") or clash.get("ws_opts") or {}
-            if isinstance(opts, dict):
-                if opts.get("path"):
-                    result["path"] = str(opts.get("path") or "")
-                headers = opts.get("headers")
-                host = _header_value(headers, "host")
-                if host:
-                    result["host"] = host
-                if isinstance(headers, dict) and headers:
-                    result["_headers"] = json.dumps(headers, ensure_ascii=False)
-        elif network == "grpc":
-            opts = clash.get("grpc-opts") or clash.get("grpc_opts") or {}
-            if isinstance(opts, dict):
-                service = opts.get("grpc-service-name") or opts.get("service-name") or opts.get("service_name")
-                if service:
-                    result["serviceName"] = str(service)
-                if opts.get("authority"):
-                    result["authority"] = str(opts.get("authority") or "")
-        elif network == "xhttp":
-            opts = clash.get("xhttp-opts") or clash.get("xhttp_opts") or {}
-            if isinstance(opts, dict):
-                if opts.get("path"):
-                    result["path"] = str(opts.get("path") or "")
-                if opts.get("host"):
-                    result["host"] = str(opts.get("host") or "")
-                if opts.get("mode"):
-                    result["mode"] = str(opts.get("mode") or "")
-                if isinstance(opts.get("extra"), dict):
-                    result["extra"] = json.dumps(opts["extra"], ensure_ascii=False)
-        elif network in {"httpupgrade", "http-upgrade"}:
-            opts = clash.get("http-upgrade-opts") or clash.get("httpupgrade-opts") or {}
-            if isinstance(opts, dict):
-                if opts.get("path"):
-                    result["path"] = str(opts.get("path") or "")
-                if opts.get("host"):
-                    result["host"] = str(opts.get("host") or "")
-
-    return result
-
-
-def make_xray_vless_outbound(node: Node) -> dict[str, Any]:
-    if node.protocol != "vless":
-        raise ValueError("Xray builder используется только для VLESS")
-
-    query = _node_query(node)
-    uuid = str(node.outbound.get("uuid") or "")
-    encryption = query.get("encryption", "none") or "none"
-    settings: dict[str, Any] = {
-        "address": node.server,
-        "port": node.port,
-        "id": uuid,
-        "encryption": encryption,
-    }
-
-    flow = str(node.outbound.get("flow") or query.get("flow") or "")
-    if flow:
-        settings["flow"] = flow
-
-    transport = str(
-        node.extra.get("transport")
-        or query.get("type")
-        or query.get("network")
-        or "raw"
-    ).lower()
-    method_map = {
-        "tcp": "raw",
-        "raw": "raw",
-        "ws": "websocket",
-        "websocket": "websocket",
-        "grpc": "grpc",
-        "xhttp": "xhttp",
-        "httpupgrade": "httpupgrade",
-        "http-upgrade": "httpupgrade",
-    }
-    supported = {"raw", "xhttp", "grpc", "websocket", "httpupgrade", "mkcp", "hysteria"}
-    method = method_map.get(transport, transport if transport in supported else "raw")
-    security = str(node.extra.get("security") or query.get("security") or "none").lower()
-    stream: dict[str, Any] = {"method": method, "security": security}
-
-    path = urllib.parse.unquote(query.get("path", ""))
-    host = urllib.parse.unquote(query.get("host", ""))
-    if method == "websocket":
-        ws: dict[str, Any] = {}
-        if path:
-            ws["path"] = path
-        if host:
-            ws["host"] = host
-        headers_raw = query.get("_headers", "")
-        if headers_raw:
-            try:
-                headers = json.loads(headers_raw)
-                if isinstance(headers, dict):
-                    ws["headers"] = {str(k): str(v) for k, v in headers.items()}
-            except Exception:
-                pass
-        stream["wsSettings"] = ws
-    elif method == "grpc":
-        service = urllib.parse.unquote(
-            query.get("serviceName")
-            or query.get("service_name")
-            or query.get("service-name")
-            or path
-            or ""
-        )
-        grpc: dict[str, Any] = {}
-        if service:
-            grpc["serviceName"] = service
-        if query.get("authority"):
-            grpc["authority"] = urllib.parse.unquote(query["authority"])
-        stream["grpcSettings"] = grpc
-    elif method == "xhttp":
-        xhttp: dict[str, Any] = {}
-        if path:
-            xhttp["path"] = path
-        if host:
-            xhttp["host"] = host
-        mode = query.get("mode", "")
-        if mode:
-            xhttp["mode"] = mode
-        extra_raw = urllib.parse.unquote(query.get("extra", ""))
-        if extra_raw:
-            try:
-                extra = json.loads(extra_raw)
-                if isinstance(extra, dict):
-                    xhttp["extra"] = extra
-            except Exception:
-                pass
-        stream["xhttpSettings"] = xhttp
-    elif method == "httpupgrade":
-        upgrade: dict[str, Any] = {}
-        if path:
-            upgrade["path"] = path
-        if host:
-            upgrade["host"] = host
-        stream["httpupgradeSettings"] = upgrade
-
-    sni = urllib.parse.unquote(
-        query.get("sni") or query.get("serverName") or query.get("servername") or ""
-    )
-    fingerprint = query.get("fp") or query.get("fingerprint") or query.get("client-fingerprint") or "chrome"
-    insecure = _bool(query.get("allowInsecure") or query.get("insecure") or query.get("skip-cert-verify"))
-    alpn = urllib.parse.unquote(query.get("alpn", ""))
-
-    if security == "tls":
-        tls: dict[str, Any] = {"allowInsecure": insecure}
-        if sni:
-            tls["serverName"] = sni
-        if fingerprint:
-            tls["fingerprint"] = fingerprint
-        if alpn:
-            tls["alpn"] = _split_csv(alpn)
-        stream["tlsSettings"] = tls
-    elif security == "reality":
-        reality: dict[str, Any] = {"fingerprint": fingerprint or "chrome"}
-        if sni:
-            reality["serverName"] = sni
-        public_key = query.get("pbk") or query.get("publicKey") or query.get("public_key") or ""
-        if public_key:
-            reality["password"] = public_key
-        short_id = query.get("sid") or query.get("shortId") or query.get("short_id") or ""
-        if short_id:
-            reality["shortId"] = short_id
-        spider = urllib.parse.unquote(query.get("spx") or query.get("spiderX") or "")
-        if spider:
-            reality["spiderX"] = spider
-        stream["realitySettings"] = reality
-
-    return {
-        "protocol": "vless",
-        "tag": "proxy",
-        "settings": settings,
-        "streamSettings": stream,
-    }
-
-
-def make_xray_test_config(node: Node, port: int, log_path: Path) -> dict[str, Any]:
-    return {
-        "log": {"loglevel": "warning", "error": str(log_path)},
-        "inbounds": [{
-            "listen": "127.0.0.1",
-            "port": port,
-            "protocol": "socks",
-            "settings": {"udp": True, "ip": "127.0.0.1"},
-            "tag": "test-in",
-        }],
-        "outbounds": [
-            make_xray_vless_outbound(node),
-            {"protocol": "freedom", "tag": "direct"},
-        ],
-    }
-
-
 def make_test_config(node: Node, port: int, log_path: Path) -> dict[str, Any]:
-    outbound = copy.deepcopy(node.outbound)
-    outbound["tag"] = "proxy"
+    outbound = singbox_outbound(node)
     return {
         "log": {"level": "error", "timestamp": True, "output": str(log_path)},
         "inbounds": [{
@@ -368,8 +69,8 @@ def make_test_config(node: Node, port: int, log_path: Path) -> dict[str, Any]:
 
 
 def _wait_port(port: int, proc: subprocess.Popen[Any], timeout: float = 4.0) -> bool:
-    end = time.time() + timeout
-    while time.time() < end:
+    end = time.monotonic() + max(0.1, timeout)
+    while time.monotonic() < end:
         if proc.poll() is not None:
             return False
         try:
@@ -380,42 +81,43 @@ def _wait_port(port: int, proc: subprocess.Popen[Any], timeout: float = 4.0) -> 
     return False
 
 
-def _recv_exact(sock: socket.socket, length: int) -> bytes:
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
     data = bytearray()
-    while len(data) < length:
-        chunk = sock.recv(length - len(data))
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
         if not chunk:
-            raise OSError("socket closed")
+            raise OSError("SOCKS соединение закрыто")
         data.extend(chunk)
     return bytes(data)
 
 
-def socks5_connect(proxy_port: int, host: str, port: int, timeout: float = 2.5) -> socket.socket:
+def socks5_connect(proxy_port: int, host: str, port: int, timeout: float = 3.0) -> socket.socket:
     sock = socket.create_connection(("127.0.0.1", proxy_port), timeout=timeout)
     sock.settimeout(timeout)
     sock.sendall(b"\x05\x01\x00")
     if _recv_exact(sock, 2) != b"\x05\x00":
-        raise OSError("SOCKS auth")
+        sock.close()
+        raise OSError("SOCKS5 authentication rejected")
 
     try:
-        ip = ipaddress.ip_address(host)
-        if ip.version == 4:
-            address_type = 1
-            address = socket.inet_pton(socket.AF_INET, host)
-        else:
-            address_type = 4
-            address = socket.inet_pton(socket.AF_INET6, host)
-    except ValueError:
-        encoded = host.encode("idna")
-        address_type = 3
-        address = bytes([len(encoded)]) + encoded
+        packed = socket.inet_pton(socket.AF_INET, host)
+        request = b"\x05\x01\x00\x01" + packed + struct.pack("!H", port)
+    except OSError:
+        try:
+            packed6 = socket.inet_pton(socket.AF_INET6, host)
+            request = b"\x05\x01\x00\x04" + packed6 + struct.pack("!H", port)
+        except OSError:
+            encoded = host.encode("idna")
+            if len(encoded) > 255:
+                sock.close()
+                raise OSError("Слишком длинное имя хоста")
+            request = b"\x05\x01\x00\x03" + bytes([len(encoded)]) + encoded + struct.pack("!H", port)
 
-    request = b"\x05\x01\x00" + bytes([address_type]) + address + struct.pack("!H", port)
     sock.sendall(request)
     header = _recv_exact(sock, 4)
     if header[1] != 0:
-        raise OSError(f"SOCKS REP={header[1]}")
-
+        sock.close()
+        raise OSError(f"SOCKS5 connect failed: {header[1]}")
     if header[3] == 1:
         _recv_exact(sock, 4)
     elif header[3] == 4:
@@ -429,6 +131,7 @@ def socks5_connect(proxy_port: int, host: str, port: int, timeout: float = 2.5) 
 def _https_once(proxy_port: int, timeout: float) -> float | None:
     started = time.perf_counter()
     raw_socket: socket.socket | None = None
+    secure_socket: ssl.SSLSocket | None = None
     try:
         raw_socket = socks5_connect(proxy_port, HTTPS_HOST, 443, timeout)
         context = ssl.create_default_context()
@@ -441,17 +144,19 @@ def _https_once(proxy_port: int, timeout: float) -> float | None:
         ).encode("ascii")
         secure_socket.sendall(request)
         data = secure_socket.recv(256)
-        secure_socket.close()
         if b"204" not in data and b"200" not in data:
             return None
         return (time.perf_counter() - started) * 1000.0
     except Exception:
+        return None
+    finally:
         try:
-            if raw_socket:
+            if secure_socket is not None:
+                secure_socket.close()
+            elif raw_socket is not None:
                 raw_socket.close()
         except Exception:
             pass
-        return None
 
 
 def measure_https(proxy_port: int, timeout: float = 3.0, attempts: int = HTTPS_ATTEMPTS) -> tuple[int, float | None]:
@@ -471,12 +176,14 @@ def _dns_query() -> bytes:
 
 
 def test_udp_via_socks(proxy_port: int, timeout: float = 2.8) -> bool:
-    control = socket.create_connection(("127.0.0.1", proxy_port), timeout=timeout)
-    control.settimeout(timeout)
-    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp.settimeout(timeout)
-
+    control: socket.socket | None = None
+    udp: socket.socket | None = None
     try:
+        control = socket.create_connection(("127.0.0.1", proxy_port), timeout=timeout)
+        control.settimeout(timeout)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.settimeout(timeout)
+
         control.sendall(b"\x05\x01\x00")
         if _recv_exact(control, 2) != b"\x05\x00":
             return False
@@ -492,7 +199,6 @@ def test_udp_via_socks(proxy_port: int, timeout: float = 2.8) -> bool:
         else:
             bind = "127.0.0.1"
             _recv_exact(control, 16)
-
         bind_port = struct.unpack("!H", _recv_exact(control, 2))[0]
         if bind in {"0.0.0.0", "::", ""}:
             bind = "127.0.0.1"
@@ -503,7 +209,6 @@ def test_udp_via_socks(proxy_port: int, timeout: float = 2.8) -> bool:
         data, _ = udp.recvfrom(4096)
         if len(data) < 10 or data[:2] != b"\x00\x00":
             return False
-
         address_type = data[3]
         position = 4
         if address_type == 1:
@@ -517,25 +222,29 @@ def test_udp_via_socks(proxy_port: int, timeout: float = 2.8) -> bool:
     except Exception:
         return False
     finally:
-        try:
-            udp.close()
-        except Exception:
-            pass
-        try:
-            control.close()
-        except Exception:
-            pass
+        for sock in (udp, control):
+            try:
+                if sock is not None:
+                    sock.close()
+            except Exception:
+                pass
 
 
 def _test_tcp_targets(proxy_port: int, timeout: float) -> tuple[int, int]:
     success = 0
     for host, port in TCP_CHECKS:
+        sock: socket.socket | None = None
         try:
             sock = socks5_connect(proxy_port, host, port, timeout=timeout)
-            sock.close()
             success += 1
         except Exception:
             pass
+        finally:
+            try:
+                if sock is not None:
+                    sock.close()
+            except Exception:
+                pass
     return success, len(TCP_CHECKS)
 
 
@@ -543,9 +252,7 @@ def _apply_health_score(node: Node, https_success: int, https_ms: float | None) 
     attempts = HTTPS_ATTEMPTS
     stability = https_success / attempts
     tcp_ratio = node.tcp_ok / node.tcp_total if node.tcp_total else 0.0
-
-    score = stability * 600.0
-    score += tcp_ratio * 200.0
+    score = stability * 600.0 + tcp_ratio * 200.0
     if node.udp_ok:
         score += 180.0
     if https_ms is not None:
@@ -579,13 +286,26 @@ def _cleanup_test_logs(keep: int = 8) -> None:
             pass
 
 
+def _mark_validation_failure(node: Node) -> Node:
+    errors = fatal_issues(node)
+    if not errors:
+        return node
+    node.valid = False
+    node.score = -5000.0
+    node.error = "\n".join(issue.message for issue in errors)
+    node.test_status = "Некорректный профиль"
+    return node
+
+
 def _test_node_singbox(node: Node, singbox: Path, timeout: float = 3.0) -> Node:
+    if fatal_issues(node):
+        return _mark_validation_failure(node)
+
     port = find_free_port()
     safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", node.name)[:40] or "node"
     config_path = RUNTIME_DIR / f"test_{threading.get_ident()}_{port}.json"
     log_path = RUNTIME_DIR / f"test_{safe_name}_{port}.log"
-    config = make_test_config(node, port, log_path)
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    config_path.write_text(json.dumps(make_test_config(node, port, log_path), ensure_ascii=False, indent=2), encoding="utf-8")
     process: subprocess.Popen[Any] | None = None
 
     try:
@@ -596,23 +316,22 @@ def _test_node_singbox(node: Node, singbox: Path, timeout: float = 3.0) -> Node:
             encoding="utf-8",
             errors="replace",
             timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if check.returncode != 0:
             node.valid = False
-            node.error = ((check.stderr or check.stdout or "config rejected").strip())[-800:]
+            node.error = ((check.stderr or check.stdout or "config rejected").strip())[-1200:]
             node.test_status = "Конфиг не поддержан"
             return node
 
-        flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-        process = subprocess.Popen(
+        process = PROCESS_MANAGER.spawn(
             [str(singbox), "run", "-c", str(config_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=flags,
         )
         if not _wait_port(port, process, 4.5):
             node.valid = False
-            node.error = "sing-box не запустил тестовый прокси"
+            node.error = _read_log_tail(log_path) or "sing-box не запустил тестовый прокси"
             node.test_status = "Не запустился"
             return node
 
@@ -628,15 +347,7 @@ def _test_node_singbox(node: Node, singbox: Path, timeout: float = 3.0) -> Node:
         node.test_status = "Ошибка"
         return node
     finally:
-        if process and process.poll() is None:
-            try:
-                process.terminate()
-                process.wait(timeout=2)
-            except Exception:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
+        PROCESS_MANAGER.stop(process)
         try:
             config_path.unlink(missing_ok=True)
         except Exception:
@@ -650,29 +361,25 @@ def _test_node_singbox(node: Node, singbox: Path, timeout: float = 3.0) -> Node:
 
 
 def _test_node_xray(node: Node, xray: Path, timeout: float = 3.0) -> Node:
+    if fatal_issues(node):
+        return _mark_validation_failure(node)
+
     port = find_free_port()
     safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", node.name)[:40] or "node"
     config_path = RUNTIME_DIR / f"xray_test_{threading.get_ident()}_{port}.json"
     log_path = RUNTIME_DIR / f"xray_test_{safe_name}_{port}.log"
-    config = make_xray_test_config(node, port, log_path)
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    config_path.write_text(json.dumps(make_xray_test_config(node, port, log_path), ensure_ascii=False, indent=2), encoding="utf-8")
     process: subprocess.Popen[Any] | None = None
 
     try:
-        flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-        process = subprocess.Popen(
+        process = PROCESS_MANAGER.spawn(
             [str(xray), "run", "-c", str(config_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=flags,
         )
-        if not _wait_port(port, process, 5.0):
+        if not _wait_port(port, process, 5.5):
             node.valid = False
-            try:
-                tail = log_path.read_text(encoding="utf-8", errors="replace")[-1000:]
-            except Exception:
-                tail = ""
-            node.error = tail or "xray не запустил тестовый SOCKS"
+            node.error = _read_log_tail(log_path) or "Xray не запустил тестовый SOCKS"
             node.test_status = "Xray не запустился"
             return node
 
@@ -688,15 +395,7 @@ def _test_node_xray(node: Node, xray: Path, timeout: float = 3.0) -> Node:
         node.test_status = "Ошибка Xray"
         return node
     finally:
-        if process and process.poll() is None:
-            try:
-                process.terminate()
-                process.wait(timeout=2)
-            except Exception:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
+        PROCESS_MANAGER.stop(process)
         try:
             config_path.unlink(missing_ok=True)
         except Exception:
@@ -709,6 +408,13 @@ def _test_node_xray(node: Node, xray: Path, timeout: float = 3.0) -> Node:
         _cleanup_test_logs()
 
 
+def _read_log_tail(path: Path, limit: int = 1600) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:].strip()
+    except Exception:
+        return ""
+
+
 def test_node(node: Node, singbox: Path, xray: Path | None = None, timeout: float = 3.0) -> Node:
     node.tcp_ok = 0
     node.tcp_total = 0
@@ -716,16 +422,26 @@ def test_node(node: Node, singbox: Path, xray: Path | None = None, timeout: floa
     node.https_ms = None
     node.score = -999999.0
 
-    if node.protocol == "vless":
+    if not node.valid:
+        return node
+    if fatal_issues(node):
+        return _mark_validation_failure(node)
+
+    plan = choose_engine(node, xray_available=xray is not None)
+    node.extra["engine_plan"] = plan.engine
+    warnings = [issue.message for issue in validate_node(node) if issue.level == "warning"]
+    if warnings:
+        node.extra["protocol_warnings"] = warnings
+
+    if plan.engine == "xray":
         if xray is None:
             node.valid = False
             node.score = -5000.0
             node.test_status = "Нужен Xray"
-            node.error = "Для VLESS XHTTP/gRPC/WS/REALITY нужен xray.exe."
+            node.error = plan.reason
             node.extra["engine"] = "xray"
             return node
         return _test_node_xray(node, xray, timeout)
-
     return _test_node_singbox(node, singbox, timeout)
 
 
