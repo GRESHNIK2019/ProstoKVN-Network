@@ -10,6 +10,8 @@ from typing import Any
 from app_config import STRATEGIES
 from blocklists import get_cached_ru_blocklists, update_ru_blocklists
 from nodes import Node
+from paths import RUNTIME_DIR
+from process_manager import PROCESS_MANAGER
 from subscriptions import touch_subscription
 from vpn_runner import TunRunner
 
@@ -18,7 +20,6 @@ _VPN_EVENT_KINDS = {"started", "stopped"}
 
 
 def best_working_node(tested: list[Node]) -> Node | None:
-    """Выбирает только узел, который реально прошёл HTTPS-проверку."""
     good = [node for node in tested if node.valid and node.https_ms is not None]
     if not good:
         return None
@@ -39,7 +40,6 @@ def _next_generation(app) -> int:
 
 
 def _discard_pending_vpn_events(app) -> None:
-    """Убирает устаревшие started/stopped, не трогая остальные UI-события."""
     kept: list[tuple[str, object]] = []
     while True:
         try:
@@ -65,7 +65,6 @@ def _runner_for(app, node: Node, route_mode: str) -> TunRunner:
         update_ru_blocklists(lambda _text: None)
         paths = get_cached_ru_blocklists()
         app.blocklist_paths = list(paths)
-
     return TunRunner(
         app.singbox,
         node,
@@ -88,22 +87,34 @@ def _working_selected_node(app) -> Node | None:
     return node
 
 
+def _stop_runner_quietly(runner: TunRunner | None) -> None:
+    if runner is None:
+        return
+    try:
+        runner.stop()
+    except Exception:
+        pass
+
+
+def _cleanup_test_orphans() -> None:
+    PROCESS_MANAGER.cleanup_owned_processes(RUNTIME_DIR, tests_only=True)
+
+
 def _safe_finish(self, tested: list[Node]) -> None:
     self.busy = False
     self.test_btn.configure(state="normal")
-
     all_sorted = sorted(tested, key=lambda node: node.score, reverse=True)
     self.tested_nodes = all_sorted
-
     active_subscription = self._active_subscription()
     if active_subscription:
         touch_subscription(active_subscription)
         self._save_settings()
 
+    threading.Thread(target=_cleanup_test_orphans, daemon=True).start()
+
     best = best_working_node(all_sorted)
     self.selected_node = best
     self._refresh_tree()
-
     if best is None:
         self.best_var.set("Узел: —")
         self.start_btn.configure(state="disabled")
@@ -141,7 +152,7 @@ def _safe_start_vpn(self) -> None:
     if not self.singbox:
         try:
             from tkinter import messagebox
-            messagebox.showerror("ProstoKVN Network", "Не найден sing-box.exe.")
+            messagebox.showerror("ProstoKVN Network", "Не найден совместимый sing-box.exe.")
         except Exception:
             pass
         return
@@ -158,7 +169,14 @@ def _safe_start_vpn(self) -> None:
     with _state_lock(self):
         generation = _next_generation(self)
         _discard_pending_vpn_events(self)
+        old_runner = self.runner
+        old_starting = getattr(self, "_starting_runner", None)
         self.runner = None
+        self._starting_runner = None
+
+    _stop_runner_quietly(old_runner)
+    if old_starting is not old_runner:
+        _stop_runner_quietly(old_starting)
 
     def worker() -> None:
         runner: TunRunner | None = None
@@ -167,28 +185,36 @@ def _safe_start_vpn(self) -> None:
                 if generation != self._vpn_generation:
                     return
             runner = _runner_for(self, node, route_mode)
-            runner.start()
-
             with _state_lock(self):
                 if generation != self._vpn_generation:
-                    runner.stop()
                     return
-                self.runner = runner
-                self.events.put(("started", (route_mode, node)))
-        except Exception as exc:
-            if runner is not None:
-                try:
-                    runner.stop()
-                except Exception:
-                    pass
+                self._starting_runner = runner
+
+            runner.start()
+
+            obsolete = False
             with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
+                if generation != self._vpn_generation:
+                    obsolete = True
+                else:
+                    self.runner = runner
+                    self.events.put(("started", (route_mode, node)))
+            if obsolete:
+                _stop_runner_quietly(runner)
+        except Exception as exc:
+            _stop_runner_quietly(runner)
+            with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
                 if generation != self._vpn_generation:
                     return
                 self.runner = None
                 self.events.put(("stopped", None))
                 self.events.put(("error", str(exc)))
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker, name="ProstoKVN-VPN-Start", daemon=True).start()
 
 
 def _safe_apply_strategy(self) -> None:
@@ -197,10 +223,7 @@ def _safe_apply_strategy(self) -> None:
         self.start_btn.configure(state="disabled")
         try:
             from tkinter import messagebox
-            messagebox.showwarning(
-                "ProstoKVN Network",
-                "Нельзя переключить VPN на узел, который не прошёл проверку.",
-            )
+            messagebox.showwarning("ProstoKVN Network", "Нельзя переключить VPN на узел, который не прошёл проверку.")
         except Exception:
             pass
         return
@@ -218,35 +241,43 @@ def _safe_apply_strategy(self) -> None:
         generation = _next_generation(self)
         _discard_pending_vpn_events(self)
         old_runner = self.runner
-        # Watchdog не должен трактовать штатный промежуток между двумя runner как падение.
+        old_starting = getattr(self, "_starting_runner", None)
         self.runner = None
+        self._starting_runner = None
 
     def worker() -> None:
         runner: TunRunner | None = None
         try:
-            if old_runner is not None:
-                old_runner.stop()
-
+            _stop_runner_quietly(old_runner)
+            if old_starting is not old_runner:
+                _stop_runner_quietly(old_starting)
             with _state_lock(self):
                 if generation != self._vpn_generation:
                     return
-
             runner = _runner_for(self, node, route_mode)
+            with _state_lock(self):
+                if generation != self._vpn_generation:
+                    return
+                self._starting_runner = runner
+
             runner.start()
 
+            obsolete = False
             with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
                 if generation != self._vpn_generation:
-                    runner.stop()
-                    return
-                self.runner = runner
-                self.events.put(("started", (route_mode, node)))
+                    obsolete = True
+                else:
+                    self.runner = runner
+                    self.events.put(("started", (route_mode, node)))
+            if obsolete:
+                _stop_runner_quietly(runner)
         except Exception as exc:
-            if runner is not None:
-                try:
-                    runner.stop()
-                except Exception:
-                    pass
+            _stop_runner_quietly(runner)
             with _state_lock(self):
+                if self._starting_runner is runner:
+                    self._starting_runner = None
                 if generation != self._vpn_generation:
                     return
                 self.runner = None
@@ -255,7 +286,7 @@ def _safe_apply_strategy(self) -> None:
                 self.events.put(("stopped", None))
                 self.events.put(("error", str(exc)))
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker, name="ProstoKVN-VPN-Switch", daemon=True).start()
 
 
 def _safe_stop_vpn(self, silent: bool = False) -> None:
@@ -264,27 +295,71 @@ def _safe_stop_vpn(self, silent: bool = False) -> None:
         _next_generation(self)
         _discard_pending_vpn_events(self)
         runner = self.runner
+        starting = getattr(self, "_starting_runner", None)
         self.runner = None
+        self._starting_runner = None
 
-    if runner is not None:
-        try:
-            runner.stop()
-        except Exception:
-            pass
-
+    _stop_runner_quietly(runner)
+    if starting is not runner:
+        _stop_runner_quietly(starting)
     if not silent:
         self.events.put(("stopped", None))
 
 
+def _safe_on_close(self) -> None:
+    """Финальный выход: настройки → VPN → tray → все дочерние cores → Tk."""
+    if getattr(self, "_closing_app", False):
+        return
+    self._closing_app = True
+    try:
+        self._save_settings()
+    except Exception:
+        pass
+    try:
+        self.stop_vpn(silent=True)
+    except Exception:
+        pass
+    controller = getattr(self, "_tray_controller", None)
+    if controller is not None:
+        try:
+            controller.stop(final=True)
+        except Exception:
+            pass
+    try:
+        # Сюда попадают и тестовые процессы, если пользователь закрыл приложение
+        # прямо во время проверки подписки.
+        PROCESS_MANAGER.stop_all()
+    except Exception:
+        pass
+    try:
+        self.destroy()
+    except Exception:
+        pass
+
+
+def _cleanup_previous_orphans(app: Any) -> None:
+    count = PROCESS_MANAGER.cleanup_owned_processes(RUNTIME_DIR, tests_only=False)
+    if count > 0:
+        try:
+            app.events.put(("cleanup_info", count))
+        except Exception:
+            pass
+
+
 def install_runtime_safety(app: Any) -> None:
-    """Подключает P1-fixes без изменения публичного UI-контракта App."""
     if getattr(app, "_runtime_safety_installed", False):
         return
 
     app._runtime_safety_installed = True
     app._vpn_generation = 0
     app._vpn_state_lock = threading.RLock()
+    app._starting_runner = None
+    app._closing_app = False
+
+    threading.Thread(target=_cleanup_previous_orphans, args=(app,), name="ProstoKVN-Orphan-Cleanup", daemon=True).start()
+
     app._finish = types.MethodType(_safe_finish, app)
     app.start_vpn = types.MethodType(_safe_start_vpn, app)
     app.apply_strategy = types.MethodType(_safe_apply_strategy, app)
     app.stop_vpn = types.MethodType(_safe_stop_vpn, app)
+    app.on_close = types.MethodType(_safe_on_close, app)

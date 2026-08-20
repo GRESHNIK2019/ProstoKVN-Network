@@ -6,21 +6,25 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import threading
 import time
 from typing import Any
 
-from node_tester import find_free_port, make_xray_test_config, _wait_port
+from external_process import run_external
+from node_tester import find_free_port, _wait_port
 from nodes import Node
 from paths import RUNTIME_DIR
+from process_manager import PROCESS_MANAGER, process_alive
+from protocol_engine import choose_engine, fatal_issues, make_xray_test_config
 from routing import make_tun_config, normalize_process_names
 
 
-# Одновременно запускаем или останавливаем только один VPN-сеанс.
-# Это защищает от гонки при быстрых переключениях стратегии.
 _VPN_LIFECYCLE_LOCK = threading.RLock()
 TUN_INTERFACE_NAME = "prostokvn_network_tun"
+TUN_INTERFACE_IPV4 = "172.29.77.1"
+TUN_START_TIMEOUT = 12.0
 
 
 def is_admin() -> bool:
@@ -32,114 +36,32 @@ def is_admin() -> bool:
         return False
 
 
-def _creation_flags() -> int:
-    if os.name != "nt":
-        return 0
-    return (
-        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    )
-
-
-def _process_alive(process: subprocess.Popen[Any] | None) -> bool:
-    return bool(process and process.poll() is None)
-
-
-def _stop_process_tree(process: subprocess.Popen[Any] | None) -> None:
-    if not _process_alive(process):
-        return
-
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=6,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
-    else:
-        try:
-            process.terminate()
-            process.wait(timeout=4)
-        except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
-
-    try:
-        process.wait(timeout=2)
-    except Exception:
-        pass
-
-
-def _kill_stale_runtime_processes(config_paths: list[Path]) -> None:
-    """Убирает только старые процессы, запущенные с нашими runtime-конфигами."""
-    if os.name != "nt":
-        return
-
-    needles = [str(path.resolve()).lower() for path in config_paths]
-    if not needles:
-        return
-
-    quoted = ",".join("'" + item.replace("'", "''") + "'" for item in needles)
-    script = (
-        f"$needles=@({quoted}); "
-        "Get-CimInstance Win32_Process | ForEach-Object { "
-        "$cmd=[string]$_.CommandLine; "
-        "if (-not $cmd) { return }; "
-        "$lower=$cmd.ToLowerInvariant(); "
-        "$match=$false; "
-        "foreach ($needle in $needles) { if ($lower.Contains($needle)) { $match=$true; break } }; "
-        "if ($match) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } "
-        "}"
-    )
-    try:
-        subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception:
-        pass
-
-
 def _wait_tun_interface(
     name: str,
     process: subprocess.Popen[Any] | None,
     xray_process: subprocess.Popen[Any] | None = None,
     require_xray: bool = False,
-    timeout: float = 8.0,
+    timeout: float = TUN_START_TIMEOUT,
 ) -> bool:
-    """Ждёт реального появления TUN, а не только живого процесса sing-box."""
-    end = time.time() + max(0.0, timeout)
-    while time.time() < end:
-        if not _process_alive(process):
+    end = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < end:
+        if not process_alive(process):
             return False
-        if require_xray and not _process_alive(xray_process):
+        if require_xray and not process_alive(xray_process):
             return False
         if _interface_probably_exists(name):
             return True
         time.sleep(0.25)
-
-    # Последняя проверка закрывает гонку, когда интерфейс появился на границе
-    # таймаута между последней итерацией и выходом из цикла.
     return (
-        _process_alive(process)
-        and (not require_xray or _process_alive(xray_process))
+        process_alive(process)
+        and (not require_xray or process_alive(xray_process))
         and _interface_probably_exists(name)
     )
 
 
 class TunRunner:
+    """Один атомарный VPN-сеанс."""
+
     def __init__(
         self,
         singbox: Path,
@@ -152,8 +74,8 @@ class TunRunner:
         route_mode: str = "smart_ru",
         custom_vpn_processes: list[str] | None = None,
     ):
-        self.singbox = singbox
-        self.xray = xray
+        self.singbox = Path(singbox)
+        self.xray = Path(xray) if xray else None
         self.node = node
         self.discord_vpn = discord_vpn
         self.steam_webhelper_vpn = steam_webhelper_vpn
@@ -168,10 +90,21 @@ class TunRunner:
         self._health_stop: threading.Event | None = None
         self._health_thread: threading.Thread | None = None
         self._health_failure = ""
+        self._plan = choose_engine(node, xray_available=self.xray is not None)
+
         self.cfg_path = RUNTIME_DIR / "active_tun.json"
         self.log_path = RUNTIME_DIR / "active_tun.log"
         self.xray_cfg_path = RUNTIME_DIR / "active_xray.json"
         self.xray_log_path = RUNTIME_DIR / "active_xray.log"
+
+    def _validate(self) -> None:
+        errors = fatal_issues(self.node)
+        if errors:
+            raise RuntimeError("Профиль узла некорректен:\n" + "\n".join(f"• {item.message}" for item in errors))
+        if not self.singbox.is_file():
+            raise RuntimeError("Не найден sing-box.exe")
+        if self._plan.requires_xray and (self.xray is None or not self.xray.is_file()):
+            raise RuntimeError("Для выбранного VLESS-профиля нужен совместимый xray.exe")
 
     def _start_xray_bridge(self) -> dict[str, Any]:
         if not self.xray:
@@ -179,22 +112,16 @@ class TunRunner:
 
         port = find_free_port()
         config = make_xray_test_config(self.node, port, self.xray_log_path)
-        self.xray_cfg_path.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        self.xray_proc = subprocess.Popen(
+        self.xray_cfg_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.xray_proc = PROCESS_MANAGER.spawn(
             [str(self.xray), "run", "-c", str(self.xray_cfg_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=_creation_flags(),
         )
-
-        if not _wait_port(port, self.xray_proc, 6.0):
+        if not _wait_port(port, self.xray_proc, 7.0):
             raise RuntimeError(
                 "Xray не смог поднять выбранный VLESS-узел:\n" + self._read_log_tail(self.xray_log_path)
             )
-
         return {
             "type": "socks",
             "tag": "proxy",
@@ -212,13 +139,12 @@ class TunRunner:
             self._health_failure = ""
             self._health_stop = threading.Event()
             try:
-                # После аварийного завершения прошлой копии могли остаться процессы,
-                # которые всё ещё используют наши active_*.json.
-                _kill_stale_runtime_processes([self.cfg_path, self.xray_cfg_path])
+                self._validate()
+                PROCESS_MANAGER.cleanup_owned_processes(RUNTIME_DIR, tests_only=False)
                 self._prepare_runtime_files()
 
                 proxy_override = None
-                if self.node.protocol == "vless":
+                if self._plan.engine == "xray":
                     proxy_override = self._start_xray_bridge()
 
                 config = make_tun_config(
@@ -232,12 +158,9 @@ class TunRunner:
                     route_mode=self.route_mode,
                     custom_vpn_processes=self.custom_vpn_processes,
                 )
-                self.cfg_path.write_text(
-                    json.dumps(config, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                self.cfg_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
-                check = subprocess.run(
+                check = run_external(
                     [str(self.singbox), "check", "-c", str(self.cfg_path)],
                     capture_output=True,
                     text=True,
@@ -247,36 +170,33 @@ class TunRunner:
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 if check.returncode != 0:
-                    details = (check.stderr or check.stdout or "").strip()[-1600:]
+                    details = (check.stderr or check.stdout or "").strip()[-1800:]
                     raise RuntimeError("sing-box отклонил рабочий конфиг:\n" + details)
 
-                self.proc = subprocess.Popen(
+                self.proc = PROCESS_MANAGER.spawn(
                     [str(self.singbox), "run", "-c", str(self.cfg_path)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    creationflags=_creation_flags(),
                 )
 
+                require_xray = self._plan.engine == "xray"
                 ready = _wait_tun_interface(
                     TUN_INTERFACE_NAME,
                     self.proc,
                     self.xray_proc,
-                    require_xray=(self.node.protocol == "vless"),
-                    timeout=8.0,
+                    require_xray=require_xray,
+                    timeout=TUN_START_TIMEOUT,
                 )
                 if ready:
                     self._start_health_monitor()
                     return
 
-                if self.proc.poll() is not None:
+                if not process_alive(self.proc):
                     raise RuntimeError("TUN завершился при запуске:\n" + self.failure_reason())
-                if self.node.protocol == "vless" and not _process_alive(self.xray_proc):
+                if require_xray and not process_alive(self.xray_proc):
                     raise RuntimeError("Xray завершился при запуске:\n" + self.failure_reason())
-
-                # Раньше живой sing-box после истечения таймаута считался успешным
-                # запуском даже без созданного TUN-интерфейса.
                 raise RuntimeError(
-                    f"TUN-интерфейс {TUN_INTERFACE_NAME} не появился за 8 секунд.\n"
+                    f"TUN-интерфейс {TUN_INTERFACE_NAME} не появился за {int(TUN_START_TIMEOUT)} секунд.\n"
                     + self.failure_reason()
                 )
             except Exception:
@@ -295,30 +215,23 @@ class TunRunner:
             while not stop_event.wait(1.5):
                 if not self._main_process_running():
                     return
-
                 if _interface_probably_exists(TUN_INTERFACE_NAME):
                     missing_checks = 0
                     continue
-
                 missing_checks += 1
-                if missing_checks < 2:
+                if missing_checks < 3:
                     continue
-
                 with _VPN_LIFECYCLE_LOCK:
                     if stop_event is not self._health_stop or stop_event.is_set():
                         return
                     self._health_failure = (
-                        f"TUN-интерфейс {TUN_INTERFACE_NAME} исчез после запуска. "
-                        "VPN-сеанс остановлен для безопасного переподключения."
+                        f"TUN-интерфейс {TUN_INTERFACE_NAME} отсутствует три проверки подряд. "
+                        "VPN-сеанс остановлен перед переподключением."
                     )
                     self._stop_locked()
                 return
 
-        self._health_thread = threading.Thread(
-            target=monitor,
-            name="ProstoKVN-TUN-Health",
-            daemon=True,
-        )
+        self._health_thread = threading.Thread(target=monitor, name="ProstoKVN-TUN-Health", daemon=True)
         self._health_thread.start()
 
     def stop(self) -> None:
@@ -329,11 +242,8 @@ class TunRunner:
     def _stop_locked(self) -> None:
         if self._health_stop is not None:
             self._health_stop.set()
-
-        # Сначала TUN, затем локальный Xray-мост.
-        _stop_process_tree(self.proc)
-        _stop_process_tree(self.xray_proc)
-
+        PROCESS_MANAGER.stop(self.proc)
+        PROCESS_MANAGER.stop(self.xray_proc)
         self.proc = None
         self.xray_proc = None
         for path in (self.cfg_path, self.xray_cfg_path):
@@ -351,14 +261,13 @@ class TunRunner:
                 pass
 
     def _main_process_running(self) -> bool:
-        if not _process_alive(self.proc):
+        if not process_alive(self.proc):
             return False
-        if self.node.protocol == "vless":
-            return _process_alive(self.xray_proc)
+        if self._plan.engine == "xray":
+            return process_alive(self.xray_proc)
         return True
 
     def running(self) -> bool:
-        # Watchdog не должен считать VPN упавшим, пока start() ещё поднимает Xray/TUN.
         if self._starting:
             return True
         if self._health_failure:
@@ -385,22 +294,88 @@ class TunRunner:
             return ""
 
 
-def _interface_probably_exists(name: str) -> bool:
+def _local_ipv4_assigned(ipv4: str) -> bool:
+    """Проверяет адрес без PowerShell/netsh.
+
+    Windows не разрешает bind() к IPv4, который не назначен локальному хосту
+    (WSAEADDRNOTAVAIL). Поэтому успешный bind на случайный UDP-порт является
+    надёжным и быстрым признаком того, что TUN уже получил свой адрес.
+    """
+    if not ipv4:
+        return False
+    probe: socket.socket | None = None
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind((str(ipv4), 0))
+        return True
+    except OSError:
+        return False
+    finally:
+        if probe is not None:
+            try:
+                probe.close()
+            except Exception:
+                pass
+
+
+def _interface_probably_exists(name: str, ipv4: str = TUN_INTERFACE_IPV4) -> bool:
+    """Проверяет готовность TUN несколькими независимыми способами.
+
+    Сначала проверяем сам локальный IPv4 через socket.bind — это не зависит ни
+    от локализации Windows, ни от alias Wintun, ни от PowerShell. Затем остаются
+    проверки по имени/IP через Windows cmdlets и netsh как резерв.
+    """
     if os.name != "nt":
         return True
+
+    if _local_ipv4_assigned(ipv4):
+        return True
+
+    safe_name = str(name).replace("'", "''")
+    safe_ip = str(ipv4).replace("'", "''")
+    script = (
+        f"$n='{safe_name}'; $ip='{safe_ip}'; $ready=$false; "
+        "$a=Get-NetAdapter -Name $n -ErrorAction SilentlyContinue; "
+        "if ($a) {$ready=$true}; "
+        "if (-not $ready) {"
+        "$p=Get-NetIPAddress -IPAddress $ip -AddressFamily IPv4 -ErrorAction SilentlyContinue; "
+        "if ($p) {$ready=$true}}; "
+        "if (-not $ready) {"
+        "$c=Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object {"
+        "$_.InterfaceAlias -eq $n -or ($_.IPv4Address -and $_.IPv4Address.IPAddress -eq $ip)} | Select-Object -First 1; "
+        "if ($c) {$ready=$true}}; "
+        "if ($ready) {Write-Output 'READY'}"
+    )
     try:
-        result = subprocess.run(
+        result = run_external(
             [
                 "powershell",
                 "-NoProfile",
+                "-NonInteractive",
                 "-Command",
-                f"Get-NetAdapter -Name '{name}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name",
+                script,
             ],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=3.0,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return name.lower() in (result.stdout or "").lower()
+        if result.returncode == 0 and "READY" in (result.stdout or ""):
+            return True
+    except Exception:
+        pass
+
+    try:
+        result = run_external(
+            ["netsh", "interface", "ipv4", "show", "addresses"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3.0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        output = (result.stdout or "").casefold()
+        return safe_name.casefold() in output or safe_ip.casefold() in output
     except Exception:
         return False

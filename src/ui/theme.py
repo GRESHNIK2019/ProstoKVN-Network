@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import ctypes
 import os
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from app_config import PALETTES, THEME_LABELS, detect_windows_theme
+from process_manager import PROCESS_MANAGER
 from ui.dashboard import build_dashboard
 from ui.runtime_safety import install_runtime_safety
 from ui.settings_window import SettingsMixin
+from ui.tray import TrayController
 
 
 class ThemeMixin(SettingsMixin):
@@ -107,10 +109,25 @@ class ThemeMixin(SettingsMixin):
             selectforeground=[("readonly", palette["text"])],
         )
 
-        # App._build() всё ещё создаёт совместимый старый layout. На idle он
-        # заменяется новым dashboard без изменения бизнес-логики и обработчиков.
         self._modern_dashboard_built = False
+        if not hasattr(self, "_tray_controller"):
+            self._tray_controller = TrayController(self)
+        self.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
         self.after_idle(self._wire_settings_ui)
+
+    def _minimize_to_tray(self) -> None:
+        controller = getattr(self, "_tray_controller", None)
+        if controller is None:
+            controller = TrayController(self)
+            self._tray_controller = controller
+        if controller.minimize():
+            try:
+                self.status_var.set("Приложение работает в системном трее")
+                append_log = getattr(self, "_append_log", None)
+                if callable(append_log):
+                    append_log("[APP] Окно скрыто в системный трей")
+            except Exception:
+                pass
 
     def _sync_titlebar_theme(self) -> None:
         if os.name != "nt":
@@ -174,5 +191,21 @@ class ThemeMixin(SettingsMixin):
         self.after(1500, self._poll_system_theme)
 
     def _wire_settings_ui(self) -> None:
+        # Второй экземпляр нельзя допускать к общему active_tun.json/runtime:
+        # иначе он мог бы принять процессы первой копии за orphan и оборвать VPN.
+        if not PROCESS_MANAGER.primary_instance:
+            try:
+                messagebox.showinfo(
+                    "ProstoKVN Network",
+                    "ProstoKVN Network уже запущен.\n\n"
+                    "Используй существующее окно или открой его из системного трея.",
+                    parent=self,
+                )
+            finally:
+                try:
+                    self.destroy()
+                except Exception:
+                    pass
+            return
         install_runtime_safety(self)
         build_dashboard(self)
