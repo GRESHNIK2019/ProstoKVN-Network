@@ -13,6 +13,7 @@ import tempfile
 import urllib.request
 
 from app_config import UPDATE_SIGNER_SUBJECTS
+from external_process import popen_external, run_external
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -113,7 +114,6 @@ def _sha256(path: Path) -> str:
 
 
 def signer_subject_is_allowed(subject: str, allowed_subjects: tuple[str, ...] | list[str]) -> bool:
-    """Проверяет издателя без зависимости от порядка полей X.509 Subject."""
     normalized = str(subject or "").casefold()
     if not normalized:
         return False
@@ -123,7 +123,6 @@ def signer_subject_is_allowed(subject: str, allowed_subjects: tuple[str, ...] | 
 
 
 def verify_authenticode(path: Path, allowed_subjects: tuple[str, ...] | list[str] | None = None) -> str:
-    """Проверяет доверие Windows и ожидаемого издателя Authenticode-подписи."""
     if os.name != "nt":
         return "not-windows"
 
@@ -138,7 +137,7 @@ def verify_authenticode(path: Path, allowed_subjects: tuple[str, ...] | list[str
         "if ($s.SignerCertificate) {$o.Subject=[string]$s.SignerCertificate.Subject}; "
         "$o | ConvertTo-Json -Compress"
     )
-    result = subprocess.run(
+    result = run_external(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
@@ -191,7 +190,9 @@ def launch_self_updater(new_exe: Path, current_exe: Path, pid: int) -> None:
     ]
     updater.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-    subprocess.Popen(
+    # updater намеренно переживает основной процесс, поэтому особенно важно не
+    # позволить cmd.exe наследовать PyInstaller SetDllDirectory(_MEI...).
+    popen_external(
         ["cmd.exe", "/c", str(updater)],
         cwd=str(new_exe.parent),
         creationflags=flags,
