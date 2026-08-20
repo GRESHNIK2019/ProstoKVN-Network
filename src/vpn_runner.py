@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Any
 
+from external_process import run_external
 from node_tester import find_free_port, _wait_port
 from nodes import Node
 from paths import RUNTIME_DIR
@@ -57,15 +58,7 @@ def _wait_tun_interface(
 
 
 class TunRunner:
-    """Один атомарный VPN-сеанс.
-
-    Runner владеет ровно двумя возможными процессами:
-    - sing-box с TUN;
-    - локальный Xray SOCKS bridge для VLESS, когда его требует engine plan.
-
-    Создание/остановка защищены общим lifecycle lock, а сами процессы проходят
-    через ProcessManager и Windows Job Object.
-    """
+    """Один атомарный VPN-сеанс."""
 
     def __init__(
         self,
@@ -145,7 +138,6 @@ class TunRunner:
             self._health_stop = threading.Event()
             try:
                 self._validate()
-                # Убираем только orphan-процессы ProstoKVN от прошлой аварии.
                 PROCESS_MANAGER.cleanup_owned_processes(RUNTIME_DIR, tests_only=False)
                 self._prepare_runtime_files()
 
@@ -166,7 +158,7 @@ class TunRunner:
                 )
                 self.cfg_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
-                check = subprocess.run(
+                check = run_external(
                     [str(self.singbox), "check", "-c", str(self.cfg_path)],
                     capture_output=True,
                     text=True,
@@ -224,8 +216,6 @@ class TunRunner:
                 if _interface_probably_exists(TUN_INTERFACE_NAME):
                     missing_checks = 0
                     continue
-                # Get-NetAdapter иногда на короткий момент не возвращает адаптер
-                # во время изменений сети. Три подряд пропуска уменьшают false-positive.
                 missing_checks += 1
                 if missing_checks < 3:
                     continue
@@ -250,7 +240,6 @@ class TunRunner:
     def _stop_locked(self) -> None:
         if self._health_stop is not None:
             self._health_stop.set()
-        # Сначала убираем TUN, потом локальный Xray bridge.
         PROCESS_MANAGER.stop(self.proc)
         PROCESS_MANAGER.stop(self.xray_proc)
         self.proc = None
@@ -308,7 +297,7 @@ def _interface_probably_exists(name: str) -> bool:
         return True
     safe = str(name).replace("'", "''")
     try:
-        result = subprocess.run(
+        result = run_external(
             [
                 "powershell",
                 "-NoProfile",
