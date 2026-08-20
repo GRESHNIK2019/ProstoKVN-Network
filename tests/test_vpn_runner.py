@@ -26,12 +26,29 @@ class FakeProcess:
 
 class VpnRunnerLifecycleTests(unittest.TestCase):
     def make_node(self, protocol: str = "vless") -> Node:
+        if protocol == "vless":
+            outbound = {
+                "type": "vless",
+                "uuid": "11111111-1111-1111-1111-111111111111",
+            }
+            extra = {"transport": "raw", "security": "none"}
+        elif protocol == "trojan":
+            outbound = {
+                "type": "trojan",
+                "password": "secret",
+                "tls": {"enabled": True, "server_name": "localhost"},
+            }
+            extra = {"security": "tls"}
+        else:
+            outbound = {"type": protocol}
+            extra = {}
         return Node(
             name="test",
             protocol=protocol,
             server="127.0.0.1",
             port=443,
-            outbound={"type": protocol, "tag": "proxy"},
+            outbound=outbound,
+            extra=extra,
         )
 
     def make_runner(self, protocol: str = "vless") -> TunRunner:
@@ -51,7 +68,6 @@ class VpnRunnerLifecycleTests(unittest.TestCase):
         runner.proc = FakeProcess(True)
         runner.xray_proc = FakeProcess(False)
         self.assertFalse(runner.running())
-
         runner.xray_proc = FakeProcess(True)
         self.assertTrue(runner.running())
 
@@ -77,10 +93,11 @@ class VpnRunnerLifecycleTests(unittest.TestCase):
 
         stopped = []
         with (
+            mock.patch.object(runner, "_validate"),
             mock.patch.object(runner, "_start_xray_bridge", side_effect=fail_bridge),
             mock.patch.object(runner, "_prepare_runtime_files"),
-            mock.patch.object(vpn_runner, "_kill_stale_runtime_processes"),
-            mock.patch.object(vpn_runner, "_stop_process_tree", side_effect=lambda proc: stopped.append(proc)),
+            mock.patch.object(vpn_runner.PROCESS_MANAGER, "cleanup_owned_processes", return_value=0),
+            mock.patch.object(vpn_runner.PROCESS_MANAGER, "stop", side_effect=lambda proc: stopped.append(proc)),
         ):
             with self.assertRaisesRegex(RuntimeError, "bridge failed"):
                 runner.start()
@@ -104,11 +121,12 @@ class VpnRunnerLifecycleTests(unittest.TestCase):
             runner.xray_log_path = root / "active_xray.log"
 
             with (
-                mock.patch.object(vpn_runner, "_kill_stale_runtime_processes"),
+                mock.patch.object(runner, "_validate"),
+                mock.patch.object(vpn_runner.PROCESS_MANAGER, "cleanup_owned_processes", return_value=0),
+                mock.patch.object(vpn_runner.PROCESS_MANAGER, "spawn", return_value=fake_tun),
+                mock.patch.object(vpn_runner.PROCESS_MANAGER, "stop", side_effect=lambda proc: stopped.append(proc)),
                 mock.patch.object(vpn_runner.subprocess, "run", return_value=check_result),
-                mock.patch.object(vpn_runner.subprocess, "Popen", return_value=fake_tun),
                 mock.patch.object(vpn_runner, "_wait_tun_interface", return_value=False),
-                mock.patch.object(vpn_runner, "_stop_process_tree", side_effect=lambda proc: stopped.append(proc)),
             ):
                 with self.assertRaisesRegex(RuntimeError, "TUN-интерфейс"):
                     runner.start()
