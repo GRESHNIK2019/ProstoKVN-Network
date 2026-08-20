@@ -125,7 +125,7 @@ class VpnRunnerLifecycleTests(unittest.TestCase):
                 mock.patch.object(vpn_runner.PROCESS_MANAGER, "cleanup_owned_processes", return_value=0),
                 mock.patch.object(vpn_runner.PROCESS_MANAGER, "spawn", return_value=fake_tun),
                 mock.patch.object(vpn_runner.PROCESS_MANAGER, "stop", side_effect=lambda proc: stopped.append(proc)),
-                mock.patch.object(vpn_runner.subprocess, "run", return_value=check_result),
+                mock.patch.object(vpn_runner, "run_external", return_value=check_result),
                 mock.patch.object(vpn_runner, "_wait_tun_interface", return_value=False),
             ):
                 with self.assertRaisesRegex(RuntimeError, "TUN-интерфейс"):
