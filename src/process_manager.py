@@ -2,13 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-"""Жизненный цикл внешних VPN-ядер.
-
-Все xray/sing-box, запущенные новой сетевой частью, проходят через один менеджер.
-На Windows каждый процесс добавляется в Job Object с KILL_ON_JOB_CLOSE, поэтому
-он не может пережить аварийное завершение GUI. Штатный stop дополнительно убивает
-дерево процесса через taskkill и ждёт фактического завершения.
-"""
+"""Единое владение дочерними VPN-процессами и single-instance guard."""
 
 import ctypes
 from ctypes import wintypes
@@ -21,6 +15,8 @@ from typing import Any, Iterable
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+ERROR_ALREADY_EXISTS = 183
+INSTANCE_MUTEX_NAME = r"Local\ProstoKVNNetwork.Primary.v2"
 
 
 class _IO_COUNTERS(ctypes.Structure):
@@ -77,7 +73,32 @@ class ProcessManager:
         self._lock = threading.RLock()
         self._children: dict[int, subprocess.Popen[Any]] = {}
         self._job: int | None = None
-        self._job_ready = self._create_job()
+        self._mutex: int | None = None
+        self._primary_instance = self._create_instance_mutex()
+        self._job_ready = self._create_job() if self._primary_instance else False
+
+    def _create_instance_mutex(self) -> bool:
+        if os.name != "nt":
+            return True
+        try:
+            k32 = ctypes.windll.kernel32
+            k32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+            k32.CreateMutexW.restype = wintypes.HANDLE
+            k32.GetLastError.argtypes = []
+            k32.GetLastError.restype = wintypes.DWORD
+            handle = k32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
+            if not handle:
+                return True  # fail-open: не блокируем приложение из-за WinAPI ошибки
+            already_exists = int(k32.GetLastError()) == ERROR_ALREADY_EXISTS
+            self._mutex = int(handle)
+            return not already_exists
+        except Exception:
+            self._mutex = None
+            return True
+
+    @property
+    def primary_instance(self) -> bool:
+        return self._primary_instance
 
     def _create_job(self) -> bool:
         if os.name != "nt":
@@ -131,10 +152,11 @@ class ProcessManager:
             if raw_handle:
                 k32.AssignProcessToJobObject(wintypes.HANDLE(self._job), wintypes.HANDLE(int(raw_handle)))
         except Exception:
-            # Штатный stop и orphan cleanup остаются резервным механизмом.
             pass
 
     def spawn(self, args: Iterable[str] | list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+        if not self._primary_instance:
+            raise RuntimeError("VPN-процесс нельзя запустить из второй копии ProstoKVN Network.")
         if os.name == "nt" and "creationflags" not in kwargs:
             kwargs["creationflags"] = windows_creation_flags()
         process = subprocess.Popen(list(args), **kwargs)
@@ -197,23 +219,22 @@ class ProcessManager:
 
     def close(self) -> None:
         self.stop_all()
-        handle = self._job
+        job = self._job
+        mutex = self._mutex
         self._job = None
+        self._mutex = None
         self._job_ready = False
-        if os.name == "nt" and handle:
-            try:
-                ctypes.windll.kernel32.CloseHandle(wintypes.HANDLE(handle))
-            except Exception:
-                pass
+        if os.name == "nt":
+            for handle in (job, mutex):
+                if handle:
+                    try:
+                        ctypes.windll.kernel32.CloseHandle(wintypes.HANDLE(handle))
+                    except Exception:
+                        pass
 
     @staticmethod
     def cleanup_owned_processes(runtime_dir: Path, *, tests_only: bool = False) -> int:
-        """Убивает orphan xray/sing-box только от ProstoKVN Network.
-
-        Совпадение идёт по command line с постоянным runtime-каталогом приложения
-        или по legacy `_MEI...\\runtime` из старых сборок. Имена процессов других
-        клиентов не трогаются без совпадения с нашими конфигами.
-        """
+        """Удаляет orphan cores только по command line конфигов ProstoKVN."""
         if os.name != "nt":
             return 0
 
