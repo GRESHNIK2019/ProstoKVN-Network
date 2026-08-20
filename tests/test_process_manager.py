@@ -27,10 +27,13 @@ class ProcessManagerTests(unittest.TestCase):
         self.assertIsNotNone(process.poll())
 
     @unittest.skipUnless(os.name == "nt", "Windows named mutex")
-    def test_second_manager_is_not_primary(self):
+    def test_second_manager_is_not_primary_after_primary_claim(self):
+        # Mutex намеренно ленивый: сначала реальная копия приложения должна
+        # подтвердить primary, и только после этого вторая копия обязана получить False.
+        self.assertTrue(PROCESS_MANAGER.ensure_primary_instance())
         second = ProcessManager()
         try:
-            self.assertFalse(second.primary_instance)
+            self.assertFalse(second.ensure_primary_instance())
         finally:
             second.close()
 
