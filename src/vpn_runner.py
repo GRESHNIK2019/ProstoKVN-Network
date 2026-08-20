@@ -6,6 +6,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import threading
 import time
@@ -293,16 +294,41 @@ class TunRunner:
             return ""
 
 
-def _interface_probably_exists(name: str, ipv4: str = TUN_INTERFACE_IPV4) -> bool:
-    """Проверяет готовность TUN по имени И по назначенному адресу.
+def _local_ipv4_assigned(ipv4: str) -> bool:
+    """Проверяет адрес без PowerShell/netsh.
 
-    На части Windows/Wintun сборок `Get-NetAdapter -Name` не всегда возвращает
-    интерфейс под тем же alias, который передан sing-box в `interface_name`.
-    При этом адрес из TUN-конфига уже назначен и трафик реально идёт. Поэтому
-    имя адаптера используется как первый сигнал, а IPv4 — как независимый
-    второй сигнал готовности. Это устраняет ложный timeout при рабочем TUN.
+    Windows не разрешает bind() к IPv4, который не назначен локальному хосту
+    (WSAEADDRNOTAVAIL). Поэтому успешный bind на случайный UDP-порт является
+    надёжным и быстрым признаком того, что TUN уже получил свой адрес.
+    """
+    if not ipv4:
+        return False
+    probe: socket.socket | None = None
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind((str(ipv4), 0))
+        return True
+    except OSError:
+        return False
+    finally:
+        if probe is not None:
+            try:
+                probe.close()
+            except Exception:
+                pass
+
+
+def _interface_probably_exists(name: str, ipv4: str = TUN_INTERFACE_IPV4) -> bool:
+    """Проверяет готовность TUN несколькими независимыми способами.
+
+    Сначала проверяем сам локальный IPv4 через socket.bind — это не зависит ни
+    от локализации Windows, ни от alias Wintun, ни от PowerShell. Затем остаются
+    проверки по имени/IP через Windows cmdlets и netsh как резерв.
     """
     if os.name != "nt":
+        return True
+
+    if _local_ipv4_assigned(ipv4):
         return True
 
     safe_name = str(name).replace("'", "''")
@@ -339,8 +365,6 @@ def _interface_probably_exists(name: str, ipv4: str = TUN_INTERFACE_IPV4) -> boo
     except Exception:
         pass
 
-    # Последний резерв без PowerShell cmdlets: netsh обычно видит уже
-    # назначенный адрес даже в момент, когда Get-NetAdapter ещё не обновился.
     try:
         result = run_external(
             ["netsh", "interface", "ipv4", "show", "addresses"],
