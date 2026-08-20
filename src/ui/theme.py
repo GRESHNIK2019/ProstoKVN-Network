@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import ctypes
 import os
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from app_config import PALETTES, THEME_LABELS, detect_windows_theme
+from process_manager import PROCESS_MANAGER
 from ui.dashboard import build_dashboard
 from ui.runtime_safety import install_runtime_safety
 from ui.settings_window import SettingsMixin
@@ -108,11 +109,7 @@ class ThemeMixin(SettingsMixin):
             selectforeground=[("readonly", palette["text"])],
         )
 
-        # Старый layout пока создаётся App._build(), затем заменяется dashboard.
-        # Runtime safety ставится до dashboard, чтобы кнопки сразу получили
-        # безопасные lifecycle handlers.
         self._modern_dashboard_built = False
-
         if not hasattr(self, "_tray_controller"):
             self._tray_controller = TrayController(self)
         self.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
@@ -194,5 +191,21 @@ class ThemeMixin(SettingsMixin):
         self.after(1500, self._poll_system_theme)
 
     def _wire_settings_ui(self) -> None:
+        # Второй экземпляр нельзя допускать к общему active_tun.json/runtime:
+        # иначе он мог бы принять процессы первой копии за orphan и оборвать VPN.
+        if not PROCESS_MANAGER.primary_instance:
+            try:
+                messagebox.showinfo(
+                    "ProstoKVN Network",
+                    "ProstoKVN Network уже запущен.\n\n"
+                    "Используй существующее окно или открой его из системного трея.",
+                    parent=self,
+                )
+            finally:
+                try:
+                    self.destroy()
+                except Exception:
+                    pass
+            return
         install_runtime_safety(self)
         build_dashboard(self)
