@@ -40,7 +40,6 @@ def _next_generation(app) -> int:
 
 
 def _discard_pending_vpn_events(app) -> None:
-    """Убирает устаревшие started/stopped, не трогая события тестов/обновлений."""
     kept: list[tuple[str, object]] = []
     while True:
         try:
@@ -66,7 +65,6 @@ def _runner_for(app, node: Node, route_mode: str) -> TunRunner:
         update_ru_blocklists(lambda _text: None)
         paths = get_cached_ru_blocklists()
         app.blocklist_paths = list(paths)
-
     return TunRunner(
         app.singbox,
         node,
@@ -105,7 +103,6 @@ def _cleanup_test_orphans() -> None:
 def _safe_finish(self, tested: list[Node]) -> None:
     self.busy = False
     self.test_btn.configure(state="normal")
-
     all_sorted = sorted(tested, key=lambda node: node.score, reverse=True)
     self.tested_nodes = all_sorted
     active_subscription = self._active_subscription()
@@ -113,14 +110,11 @@ def _safe_finish(self, tested: list[Node]) -> None:
         touch_subscription(active_subscription)
         self._save_settings()
 
-    # Все тестовые процессы должны погаснуть в finally node_tester. Это
-    # дополнительная страховка после аварии worker-потока.
     threading.Thread(target=_cleanup_test_orphans, daemon=True).start()
 
     best = best_working_node(all_sorted)
     self.selected_node = best
     self._refresh_tree()
-
     if best is None:
         self.best_var.set("Узел: —")
         self.start_btn.configure(state="disabled")
@@ -180,7 +174,6 @@ def _safe_start_vpn(self) -> None:
         self.runner = None
         self._starting_runner = None
 
-    # Если start вызван повторно программно, старые владельцы гасятся до новой сессии.
     _stop_runner_quietly(old_runner)
     if old_starting is not old_runner:
         _stop_runner_quietly(old_starting)
@@ -195,8 +188,6 @@ def _safe_start_vpn(self) -> None:
             with _state_lock(self):
                 if generation != self._vpn_generation:
                     return
-                # Важный invariant: runner публикуется ДО start(). Поэтому кнопка
-                # «Остановить» и tray «Выход» видят даже ещё запускающиеся процессы.
                 self._starting_runner = runner
 
             runner.start()
@@ -260,7 +251,6 @@ def _safe_apply_strategy(self) -> None:
             _stop_runner_quietly(old_runner)
             if old_starting is not old_runner:
                 _stop_runner_quietly(old_starting)
-
             with _state_lock(self):
                 if generation != self._vpn_generation:
                     return
@@ -316,6 +306,37 @@ def _safe_stop_vpn(self, silent: bool = False) -> None:
         self.events.put(("stopped", None))
 
 
+def _safe_on_close(self) -> None:
+    """Финальный выход: настройки → VPN → tray → все дочерние cores → Tk."""
+    if getattr(self, "_closing_app", False):
+        return
+    self._closing_app = True
+    try:
+        self._save_settings()
+    except Exception:
+        pass
+    try:
+        self.stop_vpn(silent=True)
+    except Exception:
+        pass
+    controller = getattr(self, "_tray_controller", None)
+    if controller is not None:
+        try:
+            controller.stop(final=True)
+        except Exception:
+            pass
+    try:
+        # Сюда попадают и тестовые процессы, если пользователь закрыл приложение
+        # прямо во время проверки подписки.
+        PROCESS_MANAGER.stop_all()
+    except Exception:
+        pass
+    try:
+        self.destroy()
+    except Exception:
+        pass
+
+
 def _cleanup_previous_orphans(app: Any) -> None:
     count = PROCESS_MANAGER.cleanup_owned_processes(RUNTIME_DIR, tests_only=False)
     if count > 0:
@@ -333,6 +354,7 @@ def install_runtime_safety(app: Any) -> None:
     app._vpn_generation = 0
     app._vpn_state_lock = threading.RLock()
     app._starting_runner = None
+    app._closing_app = False
 
     threading.Thread(target=_cleanup_previous_orphans, args=(app,), name="ProstoKVN-Orphan-Cleanup", daemon=True).start()
 
@@ -340,3 +362,4 @@ def install_runtime_safety(app: Any) -> None:
     app.start_vpn = types.MethodType(_safe_start_vpn, app)
     app.apply_strategy = types.MethodType(_safe_apply_strategy, app)
     app.stop_vpn = types.MethodType(_safe_stop_vpn, app)
+    app.on_close = types.MethodType(_safe_on_close, app)
