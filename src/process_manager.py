@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-"""Единое владение дочерними VPN-процессами и single-instance guard."""
+"""Единое владение дочерними VPN-процессами и single-instance guard.
+
+Mutex создаётся лениво. Это важно для запуска исходного `.pyw`: модуль может
+импортироваться ещё до `runas`, и не-elevated bootstrap не должен успеть занять
+mutex раньше новой elevated-копии. В EXE с `--uac-admin` этот путь также безопасен.
+"""
 
 import ctypes
 from ctypes import wintypes
@@ -74,8 +79,20 @@ class ProcessManager:
         self._children: dict[int, subprocess.Popen[Any]] = {}
         self._job: int | None = None
         self._mutex: int | None = None
-        self._primary_instance = self._create_instance_mutex()
-        self._job_ready = self._create_job() if self._primary_instance else False
+        self._primary_instance: bool | None = None
+        self._job_ready = False
+        self._closed = False
+
+    def ensure_primary_instance(self) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            if self._primary_instance is not None:
+                return self._primary_instance
+            self._primary_instance = self._create_instance_mutex()
+            if self._primary_instance:
+                self._job_ready = self._create_job()
+            return self._primary_instance
 
     def _create_instance_mutex(self) -> bool:
         if os.name != "nt":
@@ -88,7 +105,7 @@ class ProcessManager:
             k32.GetLastError.restype = wintypes.DWORD
             handle = k32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
             if not handle:
-                return True  # fail-open: не блокируем приложение из-за WinAPI ошибки
+                return True  # fail-open: WinAPI ошибка не должна заблокировать запуск
             already_exists = int(k32.GetLastError()) == ERROR_ALREADY_EXISTS
             self._mutex = int(handle)
             return not already_exists
@@ -98,7 +115,7 @@ class ProcessManager:
 
     @property
     def primary_instance(self) -> bool:
-        return self._primary_instance
+        return self.ensure_primary_instance()
 
     def _create_job(self) -> bool:
         if os.name != "nt":
@@ -116,7 +133,6 @@ class ProcessManager:
             k32.SetInformationJobObject.restype = wintypes.BOOL
             k32.CloseHandle.argtypes = [wintypes.HANDLE]
             k32.CloseHandle.restype = wintypes.BOOL
-
             handle = k32.CreateJobObjectW(None, None)
             if not handle:
                 return False
@@ -139,6 +155,7 @@ class ProcessManager:
 
     @property
     def job_ready(self) -> bool:
+        self.ensure_primary_instance()
         return bool(self._job_ready and self._job)
 
     def _assign_to_job(self, process: subprocess.Popen[Any]) -> None:
@@ -152,10 +169,11 @@ class ProcessManager:
             if raw_handle:
                 k32.AssignProcessToJobObject(wintypes.HANDLE(self._job), wintypes.HANDLE(int(raw_handle)))
         except Exception:
+            # taskkill/explicit handles остаются резервным механизмом.
             pass
 
     def spawn(self, args: Iterable[str] | list[str], **kwargs: Any) -> subprocess.Popen[Any]:
-        if not self._primary_instance:
+        if not self.ensure_primary_instance():
             raise RuntimeError("VPN-процесс нельзя запустить из второй копии ProstoKVN Network.")
         if os.name == "nt" and "creationflags" not in kwargs:
             kwargs["creationflags"] = windows_creation_flags()
@@ -177,7 +195,6 @@ class ProcessManager:
         if process.poll() is not None:
             self.forget(process)
             return
-
         if os.name == "nt":
             try:
                 subprocess.run(
@@ -197,7 +214,6 @@ class ProcessManager:
                 process.terminate()
             except Exception:
                 pass
-
         try:
             process.wait(timeout=max(0.5, min(timeout, 3.0)))
         except Exception:
@@ -219,11 +235,13 @@ class ProcessManager:
 
     def close(self) -> None:
         self.stop_all()
-        job = self._job
-        mutex = self._mutex
-        self._job = None
-        self._mutex = None
-        self._job_ready = False
+        with self._lock:
+            job = self._job
+            mutex = self._mutex
+            self._job = None
+            self._mutex = None
+            self._job_ready = False
+            self._closed = True
         if os.name == "nt":
             for handle in (job, mutex):
                 if handle:
@@ -237,7 +255,6 @@ class ProcessManager:
         """Удаляет orphan cores только по command line конфигов ProstoKVN."""
         if os.name != "nt":
             return 0
-
         runtime = str(runtime_dir.resolve()).lower().replace("'", "''")
         test_clause = (
             "$known=$lower.Contains('xray_test_') -or $lower.Contains('test_'); "
