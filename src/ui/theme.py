@@ -10,6 +10,7 @@ from app_config import PALETTES, THEME_LABELS, detect_windows_theme
 from ui.dashboard import build_dashboard
 from ui.runtime_safety import install_runtime_safety
 from ui.settings_window import SettingsMixin
+from ui.tray import TrayController
 
 
 class ThemeMixin(SettingsMixin):
@@ -107,10 +108,29 @@ class ThemeMixin(SettingsMixin):
             selectforeground=[("readonly", palette["text"])],
         )
 
-        # App._build() всё ещё создаёт совместимый старый layout. На idle он
-        # заменяется новым dashboard без изменения бизнес-логики и обработчиков.
+        # Старый layout пока создаётся App._build(), затем заменяется dashboard.
+        # Runtime safety ставится до dashboard, чтобы кнопки сразу получили
+        # безопасные lifecycle handlers.
         self._modern_dashboard_built = False
+
+        if not hasattr(self, "_tray_controller"):
+            self._tray_controller = TrayController(self)
+        self.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
         self.after_idle(self._wire_settings_ui)
+
+    def _minimize_to_tray(self) -> None:
+        controller = getattr(self, "_tray_controller", None)
+        if controller is None:
+            controller = TrayController(self)
+            self._tray_controller = controller
+        if controller.minimize():
+            try:
+                self.status_var.set("Приложение работает в системном трее")
+                append_log = getattr(self, "_append_log", None)
+                if callable(append_log):
+                    append_log("[APP] Окно скрыто в системный трей")
+            except Exception:
+                pass
 
     def _sync_titlebar_theme(self) -> None:
         if os.name != "nt":
